@@ -1,0 +1,26 @@
+# Run from the data directory:
+# cd "/Users/linshen/Data engineering projects/youtube-trending-data-pipeline/data"
+
+# Source data
+aws s3 cp CAvideos.csv s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw/region=ca/
+aws s3 cp DEvideos.csv s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw/region=de/
+aws s3 cp FRvideos.csv s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw/region=fr/
+aws s3 cp GBvideos.csv s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw/region=gb/
+aws s3 cp INvideos.csv s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw/region=in/
+aws s3 cp JPvideos.csv s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw/region=jp/
+aws s3 cp KRvideos.csv s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw/region=kr/
+aws s3 cp MXvideos.csv s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw/region=mx/
+aws s3 cp RUvideos.csv s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw/region=ru/
+aws s3 cp USvideos.csv s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw/region=us/
+
+# Reference data
+aws s3 cp CA_category_id.json s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw_reference_data/region=ca/
+aws s3 cp DE_category_id.json s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw_reference_data/region=de/
+aws s3 cp FR_category_id.json s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw_reference_data/region=fr/
+aws s3 cp GB_category_id.json s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw_reference_data/region=gb/
+aws s3 cp IN_category_id.json s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw_reference_data/region=in/
+aws s3 cp JP_category_id.json s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw_reference_data/region=jp/
+aws s3 cp KR_category_id.json s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw_reference_data/region=kr/
+aws s3 cp MX_category_id.json s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw_reference_data/region=mx/
+aws s3 cp RU_category_id.json s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw_reference_data/region=ru/
+aws s3 cp US_category_id.json s3://yt-data-pipeline-bronze-eu-north-1-test/youtube/raw_reference_data/region=us/
