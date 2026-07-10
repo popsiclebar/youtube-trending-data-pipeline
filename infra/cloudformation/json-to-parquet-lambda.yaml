@@ -1,0 +1,136 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Deploy the Bronze-to-Silver YouTube JSON/CSV to Parquet Lambda.
+
+Parameters:
+  FunctionName:
+    Type: String
+    Default: yt-json-to-parquet
+    Description: Name of the Lambda function.
+
+  ImageUri:
+    Type: String
+    Description: Full ECR image URI to deploy.
+
+  BronzeBucketName:
+    Type: String
+    Description: Source S3 bucket for Bronze raw files.
+
+  SilverBucketName:
+    Type: String
+    Description: Destination S3 bucket for Silver Parquet files.
+
+  RawPrefix:
+    Type: String
+    Default: youtube/raw
+    Description: Bronze prefix containing raw CSV files.
+
+  ReferencePrefix:
+    Type: String
+    Default: youtube/raw_reference_data
+    Description: Bronze prefix containing raw category JSON files.
+
+  VideosOutputPrefix:
+    Type: String
+    Default: youtube/videos
+    Description: Silver output prefix for video Parquet files.
+
+  CategoriesOutputPrefix:
+    Type: String
+    Default: youtube/categories
+    Description: Silver output prefix for category Parquet files.
+
+  LambdaMemorySize:
+    Type: Number
+    Default: 1024
+    MinValue: 512
+    MaxValue: 10240
+    Description: Lambda memory size in MB.
+
+  LambdaTimeout:
+    Type: Number
+    Default: 300
+    MinValue: 30
+    MaxValue: 900
+    Description: Lambda timeout in seconds.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    Description: CloudWatch Logs retention period.
+
+Resources:
+  JsonToParquetFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${FunctionName}-role"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${FunctionName}-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadBronzeObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${BronzeBucketName}/${RawPrefix}/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${BronzeBucketName}/${ReferencePrefix}/*"
+              - Sid: WriteSilverObjects
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${SilverBucketName}/*"
+
+  JsonToParquetFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref FunctionName
+      PackageType: Image
+      Code:
+        ImageUri: !Ref ImageUri
+      Role: !GetAtt JsonToParquetFunctionRole.Arn
+      MemorySize: !Ref LambdaMemorySize
+      Timeout: !Ref LambdaTimeout
+      Environment:
+        Variables:
+          SILVER_BUCKET: !Ref SilverBucketName
+          RAW_PREFIX: !Ref RawPrefix
+          REFERENCE_PREFIX: !Ref ReferencePrefix
+          VIDEOS_OUTPUT_PREFIX: !Ref VideosOutputPrefix
+          CATEGORIES_OUTPUT_PREFIX: !Ref CategoriesOutputPrefix
+
+  JsonToParquetLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${FunctionName}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  AllowS3InvokeJsonToParquet:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref JsonToParquetFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:s3:::${BronzeBucketName}"
+
+Outputs:
+  FunctionName:
+    Description: Deployed Lambda function name.
+    Value: !Ref JsonToParquetFunction
+
+  FunctionArn:
+    Description: Deployed Lambda function ARN.
+    Value: !GetAtt JsonToParquetFunction.Arn
+
+  RoleArn:
+    Description: Lambda execution role ARN.
+    Value: !GetAtt JsonToParquetFunctionRole.Arn

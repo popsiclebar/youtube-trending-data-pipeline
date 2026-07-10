@@ -75,6 +75,7 @@ youtube-trending-data-pipeline/
 |   |   `-- lambda_function.py          # Fetches trending videos/categories
 |   |
 |   |-- json_to_parquet/                # Bronze-to-Silver transformation Lambda
+|   |   |-- Dockerfile                  # Container image build for AWS Lambda
 |   |   |-- lambda_function.py          # Converts raw JSON/CSV to Parquet
 |   |   `-- requirements.txt            # Lambda packaging dependencies
 |   |
@@ -100,16 +101,11 @@ youtube-trending-data-pipeline/
 |   `-- youtube_pipeline.asl.json       # Planned state machine workflow
 |
 |-- scripts/                            # Local and operational helper scripts
-|   `-- aws_copy.sh                     # Uploads local source files to Bronze S3
+|   |-- aws_copy.sh                     # Uploads local source files to Bronze S3
+|   `-- deploy_json_to_parquet.sh       # Builds and deploys the Lambda image
 |
 |-- infra/                              # Planned Infrastructure as Code
-|   |
-|   |-- s3/                             # Bronze/Silver/Gold bucket resources
-|   |-- iam/                            # Roles and permissions
-|   |-- lambda/                         # Lambda deployment resources
-|   |-- glue/                           # Glue resources
-|   |-- athena/                         # Athena workgroup/resources
-|   `-- step_functions/                 # State machine deployment resources
+|   `-- cloudformation/                 # AWS CloudFormation templates
 |
 |-- docs/                               # Architecture notes and runbooks
 |-- README.md                           # Project overview
@@ -124,3 +120,42 @@ youtube-trending-data-pipeline/
   into Silver Parquet outputs.
 - Added environment-based Lambda configuration so bucket names and path prefixes
   are not hard-coded into the function logic.
+- Added a container-based deployment path for the JSON-to-Parquet Lambda using
+  Docker, Amazon ECR, and AWS CloudFormation.
+
+## Deploy JSON-to-Parquet Lambda
+
+The deployment path uses a Lambda container image. This avoids
+manually uploading code in the AWS console and handles heavier dependencies such
+as `pandas` and `pyarrow` more reliably.
+
+Prerequisites:
+
+- AWS CLI configured with credentials and a default region.
+- Docker running locally.
+- Existing Bronze and Silver S3 buckets.
+
+Deploy:
+
+```bash
+export AWS_REGION=eu-north-1
+export BRONZE_BUCKET=<your-bronze-bucket-name>
+export SILVER_BUCKET=<your-silver-bucket-name>
+
+./scripts/deploy_json_to_parquet.sh
+```
+
+The deployment script will:
+
+- Create an ECR repository if it does not exist.
+- Build the Lambda container image from `lambda/json_to_parquet/Dockerfile`.
+- Push the image to Amazon ECR.
+- Deploy or update the CloudFormation stack.
+- Configure Lambda environment variables such as `SILVER_BUCKET`,
+  `RAW_PREFIX`, and `REFERENCE_PREFIX`.
+- Create the Lambda IAM role with read access to the Bronze prefixes and write
+  access to the Silver bucket.
+
+After deployment, connect the Bronze S3 bucket ObjectCreated event to the Lambda
+function. This trigger will be moved into Infrastructure as Code later when the
+S3 bucket resources are also managed by the project.
