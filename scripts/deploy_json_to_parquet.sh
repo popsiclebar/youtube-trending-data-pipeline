@@ -11,6 +11,8 @@ ECR_REPOSITORY="${ECR_REPOSITORY:-yt-json-to-parquet}"
 AWS_REGION="${AWS_REGION:-$(aws configure get region)}"
 RAW_PREFIX="${RAW_PREFIX:-youtube/raw}"
 REFERENCE_PREFIX="${REFERENCE_PREFIX:-youtube/raw_reference_data}"
+API_VIDEOS_PREFIX="${API_VIDEOS_PREFIX:-youtube/api_raw/videos}"
+API_CATEGORIES_PREFIX="${API_CATEGORIES_PREFIX:-youtube/api_raw/categories}"
 VIDEOS_OUTPUT_PREFIX="${VIDEOS_OUTPUT_PREFIX:-youtube/videos}"
 CATEGORIES_OUTPUT_PREFIX="${CATEGORIES_OUTPUT_PREFIX:-youtube/categories}"
 LAMBDA_MEMORY_SIZE="${LAMBDA_MEMORY_SIZE:-1024}"
@@ -77,6 +79,8 @@ aws cloudformation deploy \
     SilverBucketName="${SILVER_BUCKET}" \
     RawPrefix="${RAW_PREFIX}" \
     ReferencePrefix="${REFERENCE_PREFIX}" \
+    ApiVideosPrefix="${API_VIDEOS_PREFIX}" \
+    ApiCategoriesPrefix="${API_CATEGORIES_PREFIX}" \
     VideosOutputPrefix="${VIDEOS_OUTPUT_PREFIX}" \
     CategoriesOutputPrefix="${CATEGORIES_OUTPUT_PREFIX}" \
     LambdaMemorySize="${LAMBDA_MEMORY_SIZE}" \

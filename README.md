@@ -1,7 +1,7 @@
 # youtube-trending-data-pipeline
 
 An AWS-based data engineering side project for building a YouTube Trending Data
-Pipeline from raw source files to analytics-ready datasets.
+Pipeline from raw source files to cleansed and curated datasets.
 
 The project is designed as a learning-focused implementation of a modern data
 lake pattern. The target architecture follows a Bronze, Silver, and Gold
