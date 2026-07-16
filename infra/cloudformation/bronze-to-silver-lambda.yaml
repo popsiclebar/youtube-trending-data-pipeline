@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Deploy the Bronze-to-Silver YouTube JSON/CSV to Parquet Lambda.
+Description: Deploy the Bronze-to-Silver YouTube transform Lambda.
 
 Parameters:
   FunctionName:
     Type: String
-    Default: yt-json-to-parquet
+    Default: yt-bronze-to-silver
     Description: Name of the Lambda function.
 
   ImageUri:
@@ -49,6 +49,11 @@ Parameters:
     Default: youtube/categories
     Description: Silver output prefix for category Parquet files.
 
+  SnsAlertTopicArn:
+    Type: String
+    Default: ""
+    Description: Optional SNS topic ARN for Bronze-to-Silver failure alerts.
+
   LambdaMemorySize:
     Type: Number
     Default: 1024
@@ -68,8 +73,11 @@ Parameters:
     Default: 14
     Description: CloudWatch Logs retention period.
 
+Conditions:
+  HasSnsAlertTopic: !Not [!Equals [!Ref SnsAlertTopicArn, ""]]
+
 Resources:
-  JsonToParquetFunctionRole:
+  BronzeToSilverFunctionRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub "${FunctionName}-role"
@@ -101,15 +109,23 @@ Resources:
                 Action:
                   - s3:PutObject
                 Resource: !Sub "arn:${AWS::Partition}:s3:::${SilverBucketName}/*"
+              - !If
+                - HasSnsAlertTopic
+                - Sid: PublishFailureAlerts
+                  Effect: Allow
+                  Action:
+                    - sns:Publish
+                  Resource: !Ref SnsAlertTopicArn
+                - !Ref AWS::NoValue
 
-  JsonToParquetFunction:
+  BronzeToSilverFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Ref FunctionName
       PackageType: Image
       Code:
         ImageUri: !Ref ImageUri
-      Role: !GetAtt JsonToParquetFunctionRole.Arn
+      Role: !GetAtt BronzeToSilverFunctionRole.Arn
       MemorySize: !Ref LambdaMemorySize
       Timeout: !Ref LambdaTimeout
       Environment:
@@ -121,17 +137,18 @@ Resources:
           API_CATEGORIES_PREFIX: !Ref ApiCategoriesPrefix
           VIDEOS_OUTPUT_PREFIX: !Ref VideosOutputPrefix
           CATEGORIES_OUTPUT_PREFIX: !Ref CategoriesOutputPrefix
+          SNS_TOPIC_ARN: !Ref SnsAlertTopicArn
 
-  JsonToParquetLogGroup:
+  BronzeToSilverLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${FunctionName}"
       RetentionInDays: !Ref LogRetentionDays
 
-  AllowS3InvokeJsonToParquet:
+  AllowS3InvokeBronzeToSilver:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref JsonToParquetFunction
+      FunctionName: !Ref BronzeToSilverFunction
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
       SourceArn: !Sub "arn:${AWS::Partition}:s3:::${BronzeBucketName}"
@@ -139,12 +156,12 @@ Resources:
 Outputs:
   FunctionName:
     Description: Deployed Lambda function name.
-    Value: !Ref JsonToParquetFunction
+    Value: !Ref BronzeToSilverFunction
 
   FunctionArn:
     Description: Deployed Lambda function ARN.
-    Value: !GetAtt JsonToParquetFunction.Arn
+    Value: !GetAtt BronzeToSilverFunction.Arn
 
   RoleArn:
     Description: Lambda execution role ARN.
-    Value: !GetAtt JsonToParquetFunctionRole.Arn
+    Value: !GetAtt BronzeToSilverFunctionRole.Arn

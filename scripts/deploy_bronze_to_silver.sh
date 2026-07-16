@@ -2,12 +2,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LAMBDA_DIR="${ROOT_DIR}/lambda/json_to_parquet"
-TEMPLATE_FILE="${ROOT_DIR}/infra/cloudformation/json-to-parquet-lambda.yaml"
+LAMBDA_DIR="${ROOT_DIR}/lambda/bronze_to_silver"
+TEMPLATE_FILE="${ROOT_DIR}/infra/cloudformation/bronze-to-silver-lambda.yaml"
 
-STACK_NAME="${STACK_NAME:-yt-json-to-parquet-lambda}"
-FUNCTION_NAME="${FUNCTION_NAME:-yt-json-to-parquet}"
-ECR_REPOSITORY="${ECR_REPOSITORY:-yt-json-to-parquet}"
+STACK_NAME="${STACK_NAME:-yt-bronze-to-silver-lambda}"
+FUNCTION_NAME="${FUNCTION_NAME:-yt-bronze-to-silver}"
+ECR_REPOSITORY="${ECR_REPOSITORY:-yt-bronze-to-silver}"
 AWS_REGION="${AWS_REGION:-$(aws configure get region)}"
 RAW_PREFIX="${RAW_PREFIX:-youtube/raw}"
 REFERENCE_PREFIX="${REFERENCE_PREFIX:-youtube/raw_reference_data}"
@@ -15,6 +15,7 @@ API_VIDEOS_PREFIX="${API_VIDEOS_PREFIX:-youtube/api_raw/videos}"
 API_CATEGORIES_PREFIX="${API_CATEGORIES_PREFIX:-youtube/api_raw/categories}"
 VIDEOS_OUTPUT_PREFIX="${VIDEOS_OUTPUT_PREFIX:-youtube/videos}"
 CATEGORIES_OUTPUT_PREFIX="${CATEGORIES_OUTPUT_PREFIX:-youtube/categories}"
+SNS_TOPIC_ARN="${SNS_TOPIC_ARN:-}"
 LAMBDA_MEMORY_SIZE="${LAMBDA_MEMORY_SIZE:-1024}"
 LAMBDA_TIMEOUT="${LAMBDA_TIMEOUT:-300}"
 
@@ -83,6 +84,7 @@ aws cloudformation deploy \
     ApiCategoriesPrefix="${API_CATEGORIES_PREFIX}" \
     VideosOutputPrefix="${VIDEOS_OUTPUT_PREFIX}" \
     CategoriesOutputPrefix="${CATEGORIES_OUTPUT_PREFIX}" \
+    SnsAlertTopicArn="${SNS_TOPIC_ARN}" \
     LambdaMemorySize="${LAMBDA_MEMORY_SIZE}" \
     LambdaTimeout="${LAMBDA_TIMEOUT}"
 
