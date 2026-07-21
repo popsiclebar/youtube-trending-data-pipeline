@@ -2,12 +2,14 @@
 
 from datetime import UTC, datetime
 import json
+import re
 
 import pandas as pd
 
 from config import Settings
 from s3_io import read_s3_object, write_parquet_to_s3
-from utils import extract_region
+
+REGION_PATTERN = re.compile(r"region=([a-z]{2})")
 
 
 def transform_category_json(
@@ -15,8 +17,8 @@ def transform_category_json(
     bronze_key: str,
     source: str,
     settings: Settings,
-) -> None:
-    """Convert category JSON from Bronze into a flat Silver lookup table."""
+) -> str:
+    """Convert one category JSON file into a flat Silver Parquet lookup table."""
     region = extract_region(bronze_key)
     payload = json.loads(read_s3_object(bronze_bucket, bronze_key))
     items = payload.get("items", [])
@@ -37,15 +39,17 @@ def transform_category_json(
             }
         )
 
-    columns = [
-        "source",
-        "region",
-        "category_id",
-        "category_title",
-        "channel_id",
-        "assignable",
-    ]
-    df = pd.DataFrame(rows, columns=columns)
+    df = pd.DataFrame(
+        rows,
+        columns=[
+            "source",
+            "region",
+            "category_id",
+            "category_title",
+            "channel_id",
+            "assignable",
+        ],
+    )
     validate_category_silver(df, source)
     df = df.drop_duplicates(subset=["source", "region", "category_id"], keep="last")
     df["category_id"] = df["category_id"].astype("Int64")
@@ -69,6 +73,15 @@ def transform_category_json(
             "bronze-key": bronze_key,
         },
     )
+    return silver_key
+
+
+def extract_region(s3_key: str) -> str:
+    """Pull a region code from a Hive-style S3 path such as region=us."""
+    match = REGION_PATTERN.search(s3_key)
+    if not match:
+        raise ValueError(f"Could not find region partition in key: {s3_key}")
+    return match.group(1)
 
 
 def validate_category_silver(df: pd.DataFrame, source: str) -> None:

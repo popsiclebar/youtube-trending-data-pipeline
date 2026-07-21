@@ -1,4 +1,4 @@
-"""S3 read/write helpers for the Bronze-to-Silver Lambda."""
+"""S3 read/write helpers for the reference-to-Silver Lambda."""
 
 import io
 import logging

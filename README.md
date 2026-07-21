@@ -27,8 +27,8 @@ Data Sources
         v
     Silver Layer: Amazon S3             # Cleansed, typed, standardized Parquet
     |
-    |-- youtube/videos/source=.../region=...
-    `-- youtube/categories/source=.../region=...
+    |-- youtube/categories/source=.../region=...
+    `-- youtube/videos/source=.../region=...       # Planned Glue output
         |
         v
     Data Quality Gate                   # Planned validation before Gold
@@ -85,26 +85,22 @@ youtube-trending-data-pipeline/
 |   |   |-- storage.py
 |   |   `-- youtube_api.py
 |   |
-|   `-- bronze_to_silver/               # Bronze CSV/JSON -> Silver Parquet
-|       |-- Dockerfile                  # Container image for Lambda deployment
+|   `-- reference_to_silver/            # Category JSON -> Silver Parquet
+|       |-- category_transform.py       # Category flattening and validation
 |       |-- config.py                   # Environment variable settings
 |       |-- lambda_function.py
-|       |-- s3_io.py                    # S3 read/write helpers
-|       |-- transforms/                 # Source-specific Silver transforms
-|       |   |-- api_videos.py
-|       |   |-- categories.py
-|       |   |-- common.py
-|       |   `-- kaggle_videos.py
-|       |-- utils.py                    # Small parsing helpers
-|       `-- requirements.txt
+|       `-- s3_io.py                    # S3 read/write helpers
+|
+|-- glue/                               # Planned heavier Silver/Gold ETL jobs
+|   `-- silver_video_transforms/        # Planned CSV/API video cleansing jobs
 |
 |-- infra/
 |   `-- cloudformation/
-|       `-- bronze-to-silver-lambda.yaml # Deploys the Bronze-to-Silver Lambda
+|       `-- reference-to-silver-lambda.yaml # Deploys category transform Lambda
 |
 |-- scripts/
 |   |-- aws_copy.sh                     # Uploads Kaggle files to Bronze S3
-|   |-- deploy_bronze_to_silver.sh      # Builds/pushes/deploys Lambda image
+|   |-- deploy_reference_to_silver.sh   # Deploys category Lambda zip + layer
 |   `-- package_youtube_api_ingestion.sh # Builds ingestion Lambda zip
 |
 `-- README.md
@@ -116,10 +112,11 @@ Implemented so far:
 - Parameterized upload script for loading Kaggle files into Bronze S3.
 - YouTube API ingestion Lambda code for writing raw video/category JSON to
   Bronze S3. Deployment and scheduling are still manual/planned.
-- Bronze-to-Silver Lambda for converting Kaggle CSV/JSON and YouTube API JSON
+- Reference-to-Silver Lambda for converting Kaggle and YouTube API category JSON
   into source-partitioned Silver Parquet.
-- Container-based deployment path for the Bronze-to-Silver Lambda using Docker,
-  Amazon ECR, and AWS CloudFormation.
+- Zip-based deployment path for the Reference-to-Silver Lambda using the AWS SDK
+  for pandas managed Lambda layer.
+- Video Silver transformations are planned for AWS Glue instead of Lambda.
 
 ## Bronze And Silver Layout
 
@@ -156,7 +153,8 @@ Bronze tables are useful, but they should not replace Silver transforms. For
 example, a Bronze Crawler can make Kaggle CSV queryable in Athena, but the data
 is still raw CSV. The Silver layer converts it to typed Parquet, standardizes
 columns across Kaggle and YouTube API sources, and gives downstream jobs a more
-stable contract.
+stable contract. Category/reference JSON is small enough for Lambda; heavier
+video CSV/API transformations are planned for AWS Glue.
 
 ## Configuration
 
@@ -174,15 +172,12 @@ MAX_RESULTS=50
 SNS_TOPIC_ARN=<optional-sns-topic-arn>
 ```
 
-Bronze-to-Silver Lambda:
+Reference-to-Silver Lambda:
 
 ```text
 SILVER_BUCKET=<silver-s3-bucket>
-RAW_PREFIX=youtube/raw
 REFERENCE_PREFIX=youtube/raw_reference_data
-API_VIDEOS_PREFIX=youtube/api_raw/videos
 API_CATEGORIES_PREFIX=youtube/api_raw/categories
-VIDEOS_OUTPUT_PREFIX=youtube/videos
 CATEGORIES_OUTPUT_PREFIX=youtube/categories
 SNS_TOPIC_ARN=<optional-sns-topic-arn>
 ```
@@ -194,15 +189,16 @@ analytical tables.
 
 ## Deployment
 
-The Bronze-to-Silver Lambda is deployed as a container image. This is useful for
-data-processing dependencies such as `pandas` and `pyarrow`, which are easier to
-package reliably in a Linux Lambda container than in a local zip file.
+The Reference-to-Silver Lambda is deployed as a zip package with the AWS SDK for
+pandas managed Lambda layer. The zip contains only project code; the layer
+provides `pandas` and `pyarrow`.
 
 Prerequisites:
 
 - AWS CLI configured with credentials and a default region.
-- Docker running locally.
 - Existing Bronze and Silver S3 buckets.
+- An S3 deployment bucket for uploading the Lambda zip package.
+- The AWS SDK for pandas layer ARN for the Lambda runtime and region.
 
 Deploy:
 
@@ -210,17 +206,28 @@ Deploy:
 export AWS_REGION=eu-north-1
 export BRONZE_BUCKET=<your-bronze-bucket-name>
 export SILVER_BUCKET=<your-silver-bucket-name>
+export DEPLOYMENT_BUCKET=<your-deployment-artifacts-bucket>
 
-./scripts/deploy_bronze_to_silver.sh
+./scripts/deploy_reference_to_silver.sh
 ```
 
 The deploy script:
 
-- Creates the ECR repository if needed.
-- Builds the Lambda container image.
-- Pushes the image to Amazon ECR.
+- Builds a zip from `lambda/reference_to_silver/`.
+- Uploads the zip to the deployment bucket.
 - Deploys or updates the CloudFormation stack.
+- Attaches the AWS SDK for pandas Lambda layer.
 - Configures Lambda environment variables and IAM permissions.
+
+By default, the script uses the Python 3.12 x86_64 AWS SDK for pandas layer ARN
+for `eu-north-1`:
+
+```text
+arn:aws:lambda:eu-north-1:336392948345:layer:AWSSDKPandas-Python312:29
+```
+
+Set `AWS_SDK_PANDAS_LAYER_ARN` if you use a different region, runtime, or
+architecture.
 
 The YouTube API ingestion Lambda currently uses a zip package because it only
 needs Python standard library modules plus `boto3`, which is already available in
@@ -250,8 +257,9 @@ configured manually while the AWS foundation is still evolving.
 
 - Add Infrastructure as Code for the YouTube API ingestion Lambda.
 - Add EventBridge schedule for daily API ingestion.
-- Add S3 event triggers for Bronze-to-Silver transformation.
+- Add S3 event triggers for Reference-to-Silver transformation.
 - Add Glue Crawlers or Glue Catalog table definitions for Silver datasets.
+- Add AWS Glue ETL jobs for Silver video transforms.
 - Add data quality checks before Gold processing.
 - Build Gold aggregation jobs for trending, channel, and category analytics.
 - Add Athena queries and optional QuickSight dashboarding.

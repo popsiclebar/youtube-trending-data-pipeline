@@ -1,4 +1,4 @@
-"""Lambda entry point for routing Bronze S3 objects to Silver transforms."""
+"""Lambda entry point for routing category JSON files to Silver Parquet."""
 
 import json
 import logging
@@ -6,12 +6,8 @@ from urllib.parse import unquote_plus
 
 import boto3
 
+from category_transform import transform_category_json
 from config import load_settings
-from transforms import (
-    transform_api_videos_json,
-    transform_category_json,
-    transform_kaggle_videos_csv,
-)
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -21,7 +17,7 @@ sns = boto3.client("sns")
 
 
 def lambda_handler(event, context):
-    """Route each S3 event record to the matching Bronze-to-Silver transform."""
+    """Transform supported category JSON S3 events into Silver Parquet."""
     processed = []
     errors = []
 
@@ -33,20 +29,14 @@ def lambda_handler(event, context):
             logger.info("Processing s3://%s/%s", bucket, key)
 
             if key.startswith(SETTINGS.reference_prefix) and key.endswith(".json"):
-                transform_category_json(
+                silver_key = transform_category_json(
                     bucket, key, source="kaggle", settings=SETTINGS
                 )
-
-            elif key.startswith(SETTINGS.raw_prefix) and key.endswith(".csv"):
-                transform_kaggle_videos_csv(bucket, key, settings=SETTINGS)
-
-            elif key.startswith(SETTINGS.api_videos_prefix) and key.endswith(".json"):
-                transform_api_videos_json(bucket, key, settings=SETTINGS)
 
             elif key.startswith(SETTINGS.api_categories_prefix) and key.endswith(
                 ".json"
             ):
-                transform_category_json(
+                silver_key = transform_category_json(
                     bucket,
                     key,
                     source="youtube_api",
@@ -56,7 +46,9 @@ def lambda_handler(event, context):
                 logger.warning("Skipping unsupported file: %s", key)
                 continue
 
-            processed.append({"bucket": bucket, "key": key})
+            processed.append(
+                {"bronze_bucket": bucket, "bronze_key": key, "silver_key": silver_key}
+            )
 
         except Exception as exc:
             logger.exception("Failed to process S3 event record: %s", record)
@@ -65,7 +57,7 @@ def lambda_handler(event, context):
     if errors:
         send_failure_alert(errors)
         raise RuntimeError(
-            f"Bronze-to-Silver transform failed for {len(errors)} file(s)."
+            f"Reference-to-Silver transform failed for {len(errors)} file(s)."
         )
 
     return {"statusCode": 200, "processed": processed}
@@ -79,6 +71,6 @@ def send_failure_alert(errors: list[dict]) -> None:
 
     sns.publish(
         TopicArn=SETTINGS.sns_topic_arn,
-        Subject="[YT Pipeline] Bronze-to-Silver transform failed",
+        Subject="[YT Pipeline] Reference-to-Silver transform failed",
         Message=json.dumps({"errors": errors}, indent=2),
     )

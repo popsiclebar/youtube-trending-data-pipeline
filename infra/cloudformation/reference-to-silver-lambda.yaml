@@ -1,15 +1,23 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Deploy the Bronze-to-Silver YouTube transform Lambda.
+Description: Deploy the YouTube category reference JSON to Silver Parquet Lambda.
 
 Parameters:
   FunctionName:
     Type: String
-    Default: yt-bronze-to-silver
+    Default: yt-reference-to-silver
     Description: Name of the Lambda function.
 
-  ImageUri:
+  CodeS3Bucket:
     Type: String
-    Description: Full ECR image URI to deploy.
+    Description: S3 bucket containing the Lambda zip package.
+
+  CodeS3Key:
+    Type: String
+    Description: S3 key for the Lambda zip package.
+
+  AwsSdkPandasLayerArn:
+    Type: String
+    Description: AWS SDK for pandas Lambda layer ARN for this region/runtime.
 
   BronzeBucketName:
     Type: String
@@ -19,30 +27,15 @@ Parameters:
     Type: String
     Description: Destination S3 bucket for Silver Parquet files.
 
-  RawPrefix:
-    Type: String
-    Default: youtube/raw
-    Description: Bronze prefix containing raw CSV files.
-
   ReferencePrefix:
     Type: String
     Default: youtube/raw_reference_data
-    Description: Bronze prefix containing Kaggle raw category JSON files.
-
-  ApiVideosPrefix:
-    Type: String
-    Default: youtube/api_raw/videos
-    Description: Bronze prefix containing YouTube API raw video JSON files.
+    Description: Bronze prefix containing Kaggle category JSON files.
 
   ApiCategoriesPrefix:
     Type: String
     Default: youtube/api_raw/categories
-    Description: Bronze prefix containing YouTube API raw category JSON files.
-
-  VideosOutputPrefix:
-    Type: String
-    Default: youtube/videos
-    Description: Silver output prefix for video Parquet files.
+    Description: Bronze prefix containing YouTube API category JSON files.
 
   CategoriesOutputPrefix:
     Type: String
@@ -52,7 +45,7 @@ Parameters:
   SnsAlertTopicArn:
     Type: String
     Default: ""
-    Description: Optional SNS topic ARN for Bronze-to-Silver failure alerts.
+    Description: Optional SNS topic ARN for reference transform failure alerts.
 
   LambdaMemorySize:
     Type: Number
@@ -77,7 +70,7 @@ Conditions:
   HasSnsAlertTopic: !Not [!Equals [!Ref SnsAlertTopicArn, ""]]
 
 Resources:
-  BronzeToSilverFunctionRole:
+  ReferenceToSilverFunctionRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub "${FunctionName}-role"
@@ -95,14 +88,12 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Sid: ReadBronzeObjects
+              - Sid: ReadBronzeCategoryObjects
                 Effect: Allow
                 Action:
                   - s3:GetObject
                 Resource:
-                  - !Sub "arn:${AWS::Partition}:s3:::${BronzeBucketName}/${RawPrefix}/*"
                   - !Sub "arn:${AWS::Partition}:s3:::${BronzeBucketName}/${ReferencePrefix}/*"
-                  - !Sub "arn:${AWS::Partition}:s3:::${BronzeBucketName}/${ApiVideosPrefix}/*"
                   - !Sub "arn:${AWS::Partition}:s3:::${BronzeBucketName}/${ApiCategoriesPrefix}/*"
               - Sid: WriteSilverObjects
                 Effect: Allow
@@ -118,37 +109,38 @@ Resources:
                   Resource: !Ref SnsAlertTopicArn
                 - !Ref AWS::NoValue
 
-  BronzeToSilverFunction:
+  ReferenceToSilverFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Ref FunctionName
-      PackageType: Image
+      Runtime: python3.12
+      Handler: lambda_function.lambda_handler
       Code:
-        ImageUri: !Ref ImageUri
-      Role: !GetAtt BronzeToSilverFunctionRole.Arn
+        S3Bucket: !Ref CodeS3Bucket
+        S3Key: !Ref CodeS3Key
+      Role: !GetAtt ReferenceToSilverFunctionRole.Arn
+      Layers:
+        - !Ref AwsSdkPandasLayerArn
       MemorySize: !Ref LambdaMemorySize
       Timeout: !Ref LambdaTimeout
       Environment:
         Variables:
           SILVER_BUCKET: !Ref SilverBucketName
-          RAW_PREFIX: !Ref RawPrefix
           REFERENCE_PREFIX: !Ref ReferencePrefix
-          API_VIDEOS_PREFIX: !Ref ApiVideosPrefix
           API_CATEGORIES_PREFIX: !Ref ApiCategoriesPrefix
-          VIDEOS_OUTPUT_PREFIX: !Ref VideosOutputPrefix
           CATEGORIES_OUTPUT_PREFIX: !Ref CategoriesOutputPrefix
           SNS_TOPIC_ARN: !Ref SnsAlertTopicArn
 
-  BronzeToSilverLogGroup:
+  ReferenceToSilverLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${FunctionName}"
       RetentionInDays: !Ref LogRetentionDays
 
-  AllowS3InvokeBronzeToSilver:
+  AllowS3InvokeReferenceToSilver:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref BronzeToSilverFunction
+      FunctionName: !Ref ReferenceToSilverFunction
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
       SourceArn: !Sub "arn:${AWS::Partition}:s3:::${BronzeBucketName}"
@@ -156,12 +148,12 @@ Resources:
 Outputs:
   FunctionName:
     Description: Deployed Lambda function name.
-    Value: !Ref BronzeToSilverFunction
+    Value: !Ref ReferenceToSilverFunction
 
   FunctionArn:
     Description: Deployed Lambda function ARN.
-    Value: !GetAtt BronzeToSilverFunction.Arn
+    Value: !GetAtt ReferenceToSilverFunction.Arn
 
   RoleArn:
     Description: Lambda execution role ARN.
-    Value: !GetAtt BronzeToSilverFunctionRole.Arn
+    Value: !GetAtt ReferenceToSilverFunctionRole.Arn
