@@ -1,0 +1,192 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Deploy the YouTube Silver video transform AWS Glue job.
+
+Parameters:
+  JobName:
+    Type: String
+    Default: yt-silver-video-transform
+    Description: Name of the AWS Glue job.
+
+  ScriptS3Bucket:
+    Type: String
+    Description: S3 bucket containing the Glue script.
+
+  ScriptS3Key:
+    Type: String
+    Description: S3 key for the Glue script.
+
+  ExtraPyFilesS3Key:
+    Type: String
+    Description: S3 key for the zipped helper modules used by the Glue script.
+
+  BronzeBucketName:
+    Type: String
+    Description: Source S3 bucket for Bronze raw video files.
+
+  SilverBucketName:
+    Type: String
+    Description: Destination S3 bucket for Silver video Parquet files.
+
+  BronzeDatabaseName:
+    Type: String
+    Default: youtube_bronze
+    Description: Existing Glue database for Bronze tables.
+
+  SilverDatabaseName:
+    Type: String
+    Default: youtube_silver
+    Description: Existing Glue database for Silver tables.
+
+  Source:
+    Type: String
+    Default: all
+    AllowedValues:
+      - all
+      - kaggle
+      - youtube_api
+    Description: Which source to transform.
+
+  KaggleRawPrefix:
+    Type: String
+    Default: youtube/raw
+    Description: Bronze prefix containing Kaggle video CSV files.
+
+  ApiVideosPrefix:
+    Type: String
+    Default: youtube/api_raw/videos
+    Description: Bronze prefix containing YouTube API video JSON files.
+
+  SilverVideosPrefix:
+    Type: String
+    Default: youtube/videos
+    Description: Silver output prefix for video Parquet files.
+
+  SnsAlertTopicArn:
+    Type: String
+    Default: ""
+    Description: Optional SNS topic ARN for Glue job failure alerts.
+
+  MaxInvalidRowRatio:
+    Type: String
+    Default: "0.05"
+    Description: Maximum allowed ratio of rows missing critical Silver fields.
+
+  GlueVersion:
+    Type: String
+    Default: "4.0"
+    Description: AWS Glue version for the Spark job.
+
+  WorkerType:
+    Type: String
+    Default: G.1X
+    Description: AWS Glue worker type.
+
+  NumberOfWorkers:
+    Type: Number
+    Default: 2
+    MinValue: 2
+    Description: Number of Glue workers.
+
+  TimeoutMinutes:
+    Type: Number
+    Default: 60
+    MinValue: 1
+    Description: Glue job timeout in minutes.
+
+Conditions:
+  HasSnsAlertTopic: !Not [!Equals [!Ref SnsAlertTopicArn, ""]]
+
+Resources:
+  SilverVideoGlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${JobName}-role"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${JobName}-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadGlueScript
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${ScriptS3Bucket}/${ScriptS3Key}"
+                  - !Sub "arn:${AWS::Partition}:s3:::${ScriptS3Bucket}/${ExtraPyFilesS3Key}"
+              - Sid: ReadBronzeVideoObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${BronzeBucketName}/${KaggleRawPrefix}/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${BronzeBucketName}/${ApiVideosPrefix}/*"
+              - Sid: WriteSilverVideoObjects
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${SilverBucketName}/${SilverVideosPrefix}/*"
+              - Sid: ListDataBuckets
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${BronzeBucketName}"
+                  - !Sub "arn:${AWS::Partition}:s3:::${SilverBucketName}"
+                  - !Sub "arn:${AWS::Partition}:s3:::${ScriptS3Bucket}"
+              - !If
+                - HasSnsAlertTopic
+                - Sid: PublishFailureAlerts
+                  Effect: Allow
+                  Action:
+                    - sns:Publish
+                  Resource: !Ref SnsAlertTopicArn
+                - !Ref AWS::NoValue
+
+  SilverVideoGlueJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Ref JobName
+      Role: !GetAtt SilverVideoGlueJobRole.Arn
+      GlueVersion: !Ref GlueVersion
+      WorkerType: !Ref WorkerType
+      NumberOfWorkers: !Ref NumberOfWorkers
+      Timeout: !Ref TimeoutMinutes
+      MaxRetries: 0
+      Command:
+        Name: glueetl
+        PythonVersion: "3"
+        ScriptLocation: !Sub "s3://${ScriptS3Bucket}/${ScriptS3Key}"
+      DefaultArguments:
+        "--job-language": python
+        "--enable-metrics": "true"
+        "--enable-continuous-cloudwatch-log": "true"
+        "--extra-py-files": !Sub "s3://${ScriptS3Bucket}/${ExtraPyFilesS3Key}"
+        "--BRONZE_BUCKET": !Ref BronzeBucketName
+        "--SILVER_BUCKET": !Ref SilverBucketName
+        "--BRONZE_DATABASE": !Ref BronzeDatabaseName
+        "--SILVER_DATABASE": !Ref SilverDatabaseName
+        "--SOURCE": !Ref Source
+        "--KAGGLE_RAW_PREFIX": !Ref KaggleRawPrefix
+        "--API_VIDEOS_PREFIX": !Ref ApiVideosPrefix
+        "--SILVER_VIDEOS_PREFIX": !Ref SilverVideosPrefix
+        "--SNS_TOPIC_ARN": !Ref SnsAlertTopicArn
+        "--MAX_INVALID_ROW_RATIO": !Ref MaxInvalidRowRatio
+
+Outputs:
+  JobName:
+    Description: Deployed AWS Glue job name.
+    Value: !Ref SilverVideoGlueJob
+
+  RoleArn:
+    Description: AWS Glue job role ARN.
+    Value: !GetAtt SilverVideoGlueJobRole.Arn
