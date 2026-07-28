@@ -19,10 +19,10 @@ Data Sources
 |
 `-- Bronze Layer: Amazon S3             # Raw source data, kept source-specific
     |
-    |-- youtube/raw/...                 # Kaggle trending video CSV
-    |-- youtube/raw_reference_data/...  # Kaggle category JSON
-    |-- youtube/api_raw/videos/...      # YouTube API trending video JSON
-    `-- youtube/api_raw/categories/...  # YouTube API category JSON
+    |-- youtube/kaggle_raw/raw/...                 # Kaggle trending video CSV
+    |-- youtube/kaggle_raw/raw_reference_data/...  # Kaggle category JSON
+    |-- youtube/api_raw/videos/...                 # YouTube API trending video JSON
+    `-- youtube/api_raw/categories/...             # YouTube API category JSON
         |
         v
     Silver Layer: Amazon S3             # Cleansed, typed, standardized Parquet
@@ -102,12 +102,15 @@ youtube-trending-data-pipeline/
 |-- infra/
 |   `-- cloudformation/
 |       |-- reference-to-silver-lambda.yaml # Deploys category transform Lambda
-|       `-- silver-video-glue-job.yaml      # Deploys video transform Glue job
+|       |-- silver-video-glue-job.yaml      # Deploys video transform Glue job
+|       `-- youtube-api-pipeline-state-machine.yaml # Orchestrates API batch flow
 |
 |-- scripts/
 |   |-- aws_copy.sh                     # Uploads Kaggle files to Bronze S3
+|   |-- backfill_reference_to_silver.sh # Processes existing category JSON files
 |   |-- deploy_reference_to_silver.sh   # Deploys category Lambda zip + layer
 |   |-- deploy_silver_video_glue_job.sh # Deploys Silver video Glue job
+|   |-- deploy_youtube_api_pipeline.sh  # Deploys Step Functions orchestration
 |   `-- package_youtube_api_ingestion.sh # Builds ingestion Lambda zip
 |
 `-- README.md
@@ -126,14 +129,17 @@ Implemented so far:
 - AWS Glue job package for transforming Kaggle CSV and YouTube API video JSON
   into source-partitioned Silver Parquet.
 - CloudFormation deployment path for the Silver video AWS Glue job.
+- Explicit Silver Glue Catalog tables for `clean_category_data` and
+  `clean_video_statistics`.
+- Step Functions deployment path for automatic YouTube API batch orchestration.
 
 ## Bronze And Silver Layout
 
 Bronze input layout:
 
 ```text
-s3://<bronze-bucket>/youtube/raw/region=<region>/...
-s3://<bronze-bucket>/youtube/raw_reference_data/region=<region>/...
+s3://<bronze-bucket>/youtube/kaggle_raw/raw/region=<region>/...
+s3://<bronze-bucket>/youtube/kaggle_raw/raw_reference_data/region=<region>/...
 s3://<bronze-bucket>/youtube/api_raw/videos/region=<region>/date=<yyyy-mm-dd>/hour=<hh>/...
 s3://<bronze-bucket>/youtube/api_raw/categories/region=<region>/date=<yyyy-mm-dd>/...
 ```
@@ -141,21 +147,25 @@ s3://<bronze-bucket>/youtube/api_raw/categories/region=<region>/date=<yyyy-mm-dd
 Silver output layout:
 
 ```text
-s3://<silver-bucket>/youtube/videos/source=kaggle/region=<region>/...
-s3://<silver-bucket>/youtube/videos/source=youtube_api/region=<region>/...
+s3://<silver-bucket>/youtube/videos/source=kaggle/region=<region>/trending_date=<date>/...
+s3://<silver-bucket>/youtube/videos/source=youtube_api/region=<region>/trending_date=<date>/...
 s3://<silver-bucket>/youtube/categories/source=kaggle/region=<region>/...
 s3://<silver-bucket>/youtube/categories/source=youtube_api/region=<region>/...
 ```
 
 The `source` partition keeps lineage visible in Silver while allowing downstream
-Glue and Athena jobs to compare or combine sources intentionally.
+Glue and Athena jobs to compare or combine sources intentionally. Video data is
+also partitioned by `trending_date`, which makes daily reruns idempotent without
+partitioning down to the hour.
 
 ## Glue Catalog And Athena Strategy
 
-AWS Glue Crawlers can be used to register tables for each data lake layer:
+AWS Glue Crawlers can be used for Bronze source discovery, while Silver tables
+are managed explicitly because their schemas are part of the cleaned data
+contract:
 
 - Bronze tables expose raw source data for inspection, debugging, and lineage.
-- Silver tables expose cleaned Parquet data for most analytical SQL.
+- Silver tables expose cleaned Parquet data for analytical SQL.
 - Gold tables expose curated business metrics for dashboards and reporting.
 
 Bronze tables are useful, but they should not replace Silver transforms. For
@@ -165,9 +175,18 @@ columns across Kaggle and YouTube API sources, and gives downstream jobs a more
 stable contract. Category/reference JSON is small enough for Lambda; heavier
 video CSV/API transformations are handled by AWS Glue.
 
-The Bronze and Silver Glue database names are passed into the Silver video Glue
-job so the code stays aligned with the catalog design. Silver table creation is
-planned after the Silver video output layout and schema are validated.
+The Silver database contains:
+
+```text
+clean_category_data
+clean_video_statistics
+```
+
+Both Silver tables are defined by CloudFormation. The category Lambda registers
+`source`/`region` partitions after writing Parquet. The video Glue job writes
+through a Glue Catalog sink and updates `clean_video_statistics` with `source`,
+`region`, and `trending_date` partitions. Before each write, it deletes the
+exact daily partitions being rewritten so reruns do not append duplicate files.
 
 ## Configuration
 
@@ -189,7 +208,9 @@ Reference-to-Silver Lambda:
 
 ```text
 SILVER_BUCKET=<silver-s3-bucket>
-REFERENCE_PREFIX=youtube/raw_reference_data
+SILVER_DATABASE=<silver-glue-database>
+CATEGORIES_TABLE=clean_category_data
+REFERENCE_PREFIX=youtube/kaggle_raw/raw_reference_data
 API_CATEGORIES_PREFIX=youtube/api_raw/categories
 CATEGORIES_OUTPUT_PREFIX=youtube/categories
 SNS_TOPIC_ARN=<optional-sns-topic-arn>
@@ -202,10 +223,13 @@ BRONZE_BUCKET=<bronze-s3-bucket>
 SILVER_BUCKET=<silver-s3-bucket>
 BRONZE_DATABASE=<bronze-glue-database>
 SILVER_DATABASE=<silver-glue-database>
+SILVER_VIDEOS_TABLE=clean_video_statistics
 SOURCE=all|kaggle|youtube_api
-KAGGLE_RAW_PREFIX=youtube/raw
+KAGGLE_RAW_PREFIX=youtube/kaggle_raw/raw
 API_VIDEOS_PREFIX=youtube/api_raw/videos
 SILVER_VIDEOS_PREFIX=youtube/videos
+PROCESS_DATE=<optional-yyyy-mm-dd>
+PROCESS_HOUR=<optional-hh>
 SNS_TOPIC_ARN=<optional-sns-topic-arn>
 MAX_INVALID_ROW_RATIO=0.05
 ```
@@ -234,6 +258,7 @@ Deploy:
 export AWS_REGION=eu-north-1
 export BRONZE_BUCKET=<your-bronze-bucket-name>
 export SILVER_BUCKET=<your-silver-bucket-name>
+export SILVER_DATABASE=<your-silver-glue-database>
 export DEPLOYMENT_BUCKET=<your-deployment-artifacts-bucket>
 
 ./scripts/deploy_reference_to_silver.sh
@@ -247,15 +272,29 @@ The deploy script:
 - Attaches the AWS SDK for pandas Lambda layer.
 - Configures Lambda environment variables and IAM permissions.
 
-By default, the script uses the Python 3.12 x86_64 AWS SDK for pandas layer ARN
+By default, the script uses the Python 3.11 x86_64 AWS SDK for pandas layer ARN
 for `eu-north-1`:
 
 ```text
-arn:aws:lambda:eu-north-1:336392948345:layer:AWSSDKPandas-Python312:29
+arn:aws:lambda:eu-north-1:336392948345:layer:AWSSDKPandas-Python311:33
 ```
 
 Set `AWS_SDK_PANDAS_LAYER_ARN` if you use a different region, runtime, or
 architecture.
+
+If category JSON files already existed in Bronze before the S3 trigger was
+configured, invoke the Lambda for those existing objects with:
+
+```bash
+export AWS_REGION=eu-north-1
+export BRONZE_BUCKET=<your-bronze-bucket-name>
+export FUNCTION_NAME=yt-reference-to-silver
+export REFERENCE_PREFIX=youtube/kaggle_raw/raw_reference_data
+
+./scripts/backfill_reference_to_silver.sh
+```
+
+Use `DRY_RUN=true` to list the objects without invoking Lambda.
 
 The Silver video transform is deployed as an AWS Glue Spark job. The deploy
 script uploads the main script plus a zipped helper-module package to the
@@ -267,6 +306,7 @@ export BRONZE_BUCKET=<your-bronze-bucket-name>
 export SILVER_BUCKET=<your-silver-bucket-name>
 export BRONZE_DATABASE=<your-bronze-glue-database>
 export SILVER_DATABASE=<your-silver-glue-database>
+export SILVER_VIDEOS_TABLE=clean_video_statistics
 export DEPLOYMENT_BUCKET=<your-deployment-artifacts-bucket>
 
 ./scripts/deploy_silver_video_glue_job.sh
@@ -286,11 +326,37 @@ export SOURCE=kaggle
 export SOURCE=youtube_api
 ```
 
+For incremental YouTube API processing, pass the Bronze API batch partition:
+
+```bash
+export SOURCE=youtube_api
+export PROCESS_DATE=2026-07-28
+export PROCESS_HOUR=10
+```
+
 The job cleans common fields, measures data quality, fails when critical error
-rates are too high, deduplicates by `source`, `region`, `video_id`, and observed
-date, writes partitioned Parquet to Silver, and sends an SNS alert on failure
-when `SNS_TOPIC_ARN` is configured. For YouTube API data, observed date and
-region come from the Bronze S3 key; `published_at` comes from the JSON payload.
+rates are too high, deduplicates by `source`, `region`, `video_id`, observed
+date, and `batch_hour`, writes partitioned Parquet through the Glue sink, and
+sends an SNS alert on failure when `SNS_TOPIC_ARN` is configured. For YouTube
+API data, observed date, batch hour, and region come from the Bronze S3 key;
+`published_at` comes from the JSON payload.
+
+The YouTube API batch pipeline is deployed with Step Functions. It runs
+ingestion, starts the Silver video Glue job for the new date/hour batch, waits
+for completion, and sends SNS notifications:
+
+```bash
+export AWS_REGION=eu-north-1
+export SNS_TOPIC_ARN=<your-sns-topic-arn>
+export YOUTUBE_API_INGESTION_FUNCTION=<your-ingestion-lambda-name>
+export SILVER_VIDEO_GLUE_JOB=yt-silver-video-transform
+export ENABLE_SCHEDULE=false
+
+./scripts/deploy_youtube_api_pipeline.sh
+```
+
+Set `ENABLE_SCHEDULE=true` when you are ready for EventBridge to run it on the
+configured `SCHEDULE_EXPRESSION`.
 
 The YouTube API ingestion Lambda currently uses a zip package because it only
 needs Python standard library modules plus `boto3`, which is already available in
@@ -312,17 +378,16 @@ aws lambda update-function-code \
 Keep the Lambda handler set to `lambda_function.lambda_handler`. The extra files
 are imported by `lambda_function.py` because they are packaged in the same zip.
 
-S3 ObjectCreated triggers and the YouTube API ingestion infrastructure will be
-moved into Infrastructure as Code as the project matures. For now, those can be
-configured manually while the AWS foundation is still evolving.
+S3 ObjectCreated triggers for category files can still be configured manually
+while the AWS foundation is evolving. The YouTube API batch flow now has an
+initial Step Functions template, but the ingestion Lambda itself is still
+packaged separately.
 
 ## Roadmap
 
 - Add Infrastructure as Code for the YouTube API ingestion Lambda.
-- Add EventBridge schedule for daily API ingestion.
+- Enable the Step Functions EventBridge schedule after testing.
 - Add S3 event triggers for Reference-to-Silver transformation.
-- Add Glue Crawlers or Glue Catalog table definitions for Silver datasets.
-- Deploy and schedule AWS Glue ETL jobs for Silver video transforms.
 - Add data quality checks before Gold processing.
 - Build Gold aggregation jobs for trending, channel, and category analytics.
 - Add Athena queries and optional QuickSight dashboarding.

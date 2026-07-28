@@ -34,6 +34,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     region_codes = get_region_codes_from_event(event) or SETTINGS.region_codes
     run_timestamp = datetime.now(UTC)
     run_id = build_run_id(run_timestamp)
+    process_date = run_timestamp.strftime("%Y-%m-%d")
+    process_hour = run_timestamp.strftime("%H")
     written_objects = []
     failures = []
 
@@ -98,17 +100,17 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     return {
         "statusCode": 207 if failures else 200,
-        "body": json.dumps(
-            {
-                "message": "YouTube API ingestion completed with failures."
-                if failures
-                else "YouTube API ingestion completed.",
-                "bucket": SETTINGS.bronze_bucket,
-                "run_id": run_id,
-                "objects_written": written_objects,
-                "failures": failures,
-            }
-        ),
+        "message": "YouTube API ingestion completed with failures."
+        if failures
+        else "YouTube API ingestion completed.",
+        "bucket": SETTINGS.bronze_bucket,
+        "run_id": run_id,
+        "process_date": process_date,
+        "process_hour": process_hour,
+        "regions": list(region_codes),
+        "bronze_video_prefix": SETTINGS.videos_prefix,
+        "objects_written": written_objects,
+        "failures": failures,
     }
 
 

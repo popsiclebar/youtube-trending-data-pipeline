@@ -11,6 +11,7 @@ import logging
 
 import boto3
 from awsglue.context import GlueContext
+from awsglue.dynamicframe import DynamicFrame
 from pyspark.sql import DataFrame
 from pyspark.context import SparkContext
 
@@ -38,7 +39,7 @@ def main() -> None:
             clean_kaggle_df, kaggle_metrics = apply_quality_checks(
                 kaggle_df, "kaggle_videos", args
             )
-            write_silver_videos(clean_kaggle_df, args)
+            write_silver_videos(glue_context, clean_kaggle_df, args)
             metrics.append(kaggle_metrics)
 
         if args["source"] in {"youtube_api", "all"}:
@@ -46,7 +47,7 @@ def main() -> None:
             clean_api_df, api_metrics = apply_quality_checks(
                 api_df, "youtube_api_videos", args
             )
-            write_silver_videos(clean_api_df, args)
+            write_silver_videos(glue_context, clean_api_df, args)
             metrics.append(api_metrics)
 
         logger.info("Silver video transform completed: %s", json.dumps(metrics))
@@ -56,16 +57,47 @@ def main() -> None:
         raise
 
 
-def write_silver_videos(df: DataFrame, args: dict[str, str]) -> None:
-    """Write Silver video data as Parquet partitioned by source and region."""
+def write_silver_videos(
+    glue_context: GlueContext, df: DataFrame, args: dict[str, str]
+) -> None:
+    """Write Silver video Parquet and update the Glue Catalog table."""
     output_path = s3_path(args["silver_bucket"], args["silver_videos_prefix"])
-    (
-        df.write.mode("overwrite")
-        .format("parquet")
-        .partitionBy("source", "region")
-        .save(output_path)
+    purge_silver_partitions(glue_context, df, output_path)
+    dynamic_frame = DynamicFrame.fromDF(df, glue_context, "clean_video_statistics")
+
+    sink = glue_context.getSink(
+        connection_type="s3",
+        path=output_path,
+        enableUpdateCatalog=True,
+        updateBehavior="UPDATE_IN_DATABASE",
+        partitionKeys=["source", "region", "trending_date"],
     )
-    logger.info("Wrote Silver videos to %s", output_path)
+    sink.setCatalogInfo(
+        catalogDatabase=args["silver_database"],
+        catalogTableName=args["silver_videos_table"],
+    )
+    sink.setFormat("glueparquet", compression="snappy")
+    sink.writeFrame(dynamic_frame)
+    logger.info(
+        "Wrote Silver videos to %s and updated %s.%s",
+        output_path,
+        args["silver_database"],
+        args["silver_videos_table"],
+    )
+
+
+def purge_silver_partitions(
+    glue_context: GlueContext, df: DataFrame, output_path: str
+) -> None:
+    """Delete existing files for the exact daily partitions being rewritten."""
+    partition_rows = df.select("source", "region", "trending_date").distinct().collect()
+    for row in partition_rows:
+        partition_path = (
+            f"{output_path}/source={row['source']}/region={row['region']}/"
+            f"trending_date={row['trending_date']}/"
+        )
+        glue_context.purge_s3_path(partition_path, {"retentionPeriod": 0})
+        logger.info("Purged existing Silver partition: %s", partition_path)
 
 
 def send_failure_alert(args: dict[str, str], exc: Exception) -> None:

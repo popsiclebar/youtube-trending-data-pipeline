@@ -7,7 +7,7 @@ import re
 import pandas as pd
 
 from config import Settings
-from s3_io import read_s3_object, write_parquet_to_s3
+from s3_io import read_s3_object, register_category_partition, write_parquet_to_s3
 
 REGION_PATTERN = re.compile(r"region=([a-z]{2})")
 
@@ -58,8 +58,9 @@ def transform_category_json(
     silver_key = (
         f"{settings.categories_output_prefix}source={source}/region={region}/{filename}"
     )
+    parquet_df = df.drop(columns=["source", "region"])
     write_parquet_to_s3(
-        df,
+        parquet_df,
         settings.silver_bucket,
         silver_key,
         metadata={
@@ -67,11 +68,19 @@ def transform_category_json(
             "source": source,
             "dataset": "categories",
             "region": region,
-            "record-count": str(len(df)),
+            "record-count": str(len(parquet_df)),
             "ingestion-timestamp": datetime.now(UTC).isoformat(),
             "bronze-bucket": bronze_bucket,
             "bronze-key": bronze_key,
         },
+    )
+    register_category_partition(
+        settings.silver_database,
+        settings.categories_table,
+        settings.silver_bucket,
+        settings.categories_output_prefix,
+        source,
+        region,
     )
     return silver_key
 

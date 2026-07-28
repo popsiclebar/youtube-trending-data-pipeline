@@ -69,8 +69,11 @@ def send_failure_alert(errors: list[dict]) -> None:
         logger.info("SNS_TOPIC_ARN is not configured; skipping failure alert.")
         return
 
-    sns.publish(
-        TopicArn=SETTINGS.sns_topic_arn,
-        Subject="[YT Pipeline] Reference-to-Silver transform failed",
-        Message=json.dumps({"errors": errors}, indent=2),
-    )
+    try:
+        sns.publish(
+            TopicArn=SETTINGS.sns_topic_arn,
+            Subject="[YT Pipeline] Reference-to-Silver transform failed",
+            Message=json.dumps({"errors": errors}, indent=2),
+        )
+    except Exception:
+        logger.exception("Failed to publish SNS failure alert.")

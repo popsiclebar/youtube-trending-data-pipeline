@@ -27,9 +27,19 @@ Parameters:
     Type: String
     Description: Destination S3 bucket for Silver Parquet files.
 
+  SilverDatabaseName:
+    Type: String
+    Default: youtube_silver
+    Description: Existing Glue database for Silver tables.
+
+  CategoriesTableName:
+    Type: String
+    Default: clean_category_data
+    Description: Silver Glue table for cleaned category data.
+
   ReferencePrefix:
     Type: String
-    Default: youtube/raw_reference_data
+    Default: youtube/kaggle_raw/raw_reference_data
     Description: Bronze prefix containing Kaggle category JSON files.
 
   ApiCategoriesPrefix:
@@ -100,6 +110,14 @@ Resources:
                 Action:
                   - s3:PutObject
                 Resource: !Sub "arn:${AWS::Partition}:s3:::${SilverBucketName}/*"
+              - Sid: UpdateCategoryGlueCatalog
+                Effect: Allow
+                Action:
+                  - glue:CreatePartition
+                  - glue:GetDatabase
+                  - glue:GetPartition
+                  - glue:GetTable
+                Resource: "*"
               - !If
                 - HasSnsAlertTopic
                 - Sid: PublishFailureAlerts
@@ -113,7 +131,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Ref FunctionName
-      Runtime: python3.12
+      Runtime: python3.11
       Handler: lambda_function.lambda_handler
       Code:
         S3Bucket: !Ref CodeS3Bucket
@@ -126,10 +144,49 @@ Resources:
       Environment:
         Variables:
           SILVER_BUCKET: !Ref SilverBucketName
+          SILVER_DATABASE: !Ref SilverDatabaseName
+          CATEGORIES_TABLE: !Ref CategoriesTableName
           REFERENCE_PREFIX: !Ref ReferencePrefix
           API_CATEGORIES_PREFIX: !Ref ApiCategoriesPrefix
           CATEGORIES_OUTPUT_PREFIX: !Ref CategoriesOutputPrefix
           SNS_TOPIC_ARN: !Ref SnsAlertTopicArn
+
+  CleanCategoryDataTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref SilverDatabaseName
+      TableInput:
+        Name: !Ref CategoriesTableName
+        Description: Cleaned Silver category reference data.
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          EXTERNAL: "TRUE"
+        PartitionKeys:
+          - Name: source
+            Type: string
+          - Name: region
+            Type: string
+        StorageDescriptor:
+          Location: !Sub "s3://${SilverBucketName}/${CategoriesOutputPrefix}/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          Compressed: false
+          NumberOfBuckets: -1
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+            Parameters:
+              serialization.format: "1"
+          Columns:
+            - Name: category_id
+              Type: int
+            - Name: category_title
+              Type: string
+            - Name: channel_id
+              Type: string
+            - Name: assignable
+              Type: boolean
 
   ReferenceToSilverLogGroup:
     Type: AWS::Logs::LogGroup

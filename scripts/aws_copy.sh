@@ -17,9 +17,9 @@ for region in "${regions[@]}"; do
 
   aws s3 cp \
     "${data_dir}/${upper_region}videos.csv" \
-    "s3://${BRONZE_BUCKET}/youtube/raw/region=${region}/"
+    "s3://${BRONZE_BUCKET}/youtube/kaggle_raw/raw/region=${region}/"
 
   aws s3 cp \
     "${data_dir}/${upper_region}_category_id.json" \
-    "s3://${BRONZE_BUCKET}/youtube/raw_reference_data/region=${region}/"
+    "s3://${BRONZE_BUCKET}/youtube/kaggle_raw/raw_reference_data/region=${region}/"
 done

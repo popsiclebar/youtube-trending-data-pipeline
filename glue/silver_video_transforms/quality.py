@@ -18,7 +18,13 @@ from pyspark.sql.window import Window
 logger = logging.getLogger()
 
 REQUIRED_VIDEO_FIELDS = ["video_id", "category_id"]
-REQUIRED_OBSERVATION_FIELDS = ["source", "region", "trending_date", "published_at"]
+REQUIRED_OBSERVATION_FIELDS = [
+    "source",
+    "region",
+    "trending_date",
+    "batch_hour",
+    "published_at",
+]
 CRITICAL_COLUMNS = REQUIRED_VIDEO_FIELDS + REQUIRED_OBSERVATION_FIELDS
 NUMERIC_COLUMNS = [
     "view_count",
@@ -110,9 +116,7 @@ def cleanse_video_data(df: DataFrame) -> DataFrame:
                 ),
             )
 
-    return clean_df.withColumn(
-        "silver_quality_checked_at", F.current_timestamp()
-    )
+    return clean_df
 
 
 def collect_quality_metrics(
@@ -126,6 +130,7 @@ def collect_quality_metrics(
         "category_id": df.filter(F.col("category_id").isNull()).count(),
         "region": df.filter(F.col("region").isNull()).count(),
         "trending_date": df.filter(F.col("trending_date").isNull()).count(),
+        "batch_hour": df.filter(F.col("batch_hour").isNull()).count(),
         "published_at": df.filter(F.col("published_at").isNull()).count(),
         "title": df.filter(F.col("title").isNull()).count(),
         "channel_title": df.filter(F.col("channel_title").isNull()).count(),
@@ -161,8 +166,10 @@ def fail_on_quality_thresholds(metrics: dict[str, object], args: dict[str, str])
 
 
 def deduplicate_videos(df: DataFrame) -> DataFrame:
-    """Keep one record for each source, region, video, and observed date."""
-    window = Window.partitionBy("source", "region", "video_id", "trending_date").orderBy(
+    """Keep one record for each source, region, video, date, and batch hour."""
+    window = Window.partitionBy(
+        "source", "region", "video_id", "trending_date", "batch_hour"
+    ).orderBy(
         F.col("published_at").desc_nulls_last(),
         F.col("silver_ingestion_timestamp").desc_nulls_last(),
     )

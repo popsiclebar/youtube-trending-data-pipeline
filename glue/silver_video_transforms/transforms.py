@@ -12,7 +12,13 @@ the sources consistently.
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
-from config import extract_date_from_path, extract_region_from_path, s3_path, to_bool
+from config import (
+    extract_date_from_path,
+    extract_hour_from_path,
+    extract_region_from_path,
+    s3_path,
+    to_bool,
+)
 from quality import require_columns
 
 
@@ -61,6 +67,7 @@ def transform_kaggle_videos(spark, args: dict[str, str]) -> DataFrame:
         extract_region_from_path("_source_file").alias("region"),
         F.col("video_id"),
         trending_date.alias("trending_date"),
+        F.lit("historical").alias("batch_hour"),
         F.to_timestamp("publish_time").alias("published_at"),
         F.lit(None).cast("string").alias("channel_id"),
         F.col("channel_title"),
@@ -87,7 +94,7 @@ def transform_kaggle_videos(spark, args: dict[str, str]) -> DataFrame:
 
 def transform_api_videos(spark, args: dict[str, str]) -> DataFrame:
     """Read YouTube API Bronze JSON files and standardize them to the Silver schema."""
-    path = s3_path(args["bronze_bucket"], args["api_videos_prefix"])
+    path = build_api_videos_path(args)
     raw_df = (
         spark.read.option("multiLine", "true")
         .option("recursiveFileLookup", "true")
@@ -104,6 +111,7 @@ def transform_api_videos(spark, args: dict[str, str]) -> DataFrame:
         F.col("item.id").alias("video_id"),
         # API JSON has no trending_date; this is the date observed in the S3 key.
         extract_date_from_path("_source_file").alias("trending_date"),
+        extract_hour_from_path("_source_file").alias("batch_hour"),
         F.to_timestamp("item.snippet.publishedAt").alias("published_at"),
         F.col("item.snippet.channelId").alias("channel_id"),
         F.col("item.snippet.channelTitle").alias("channel_title"),
@@ -129,3 +137,14 @@ def transform_api_videos(spark, args: dict[str, str]) -> DataFrame:
         .alias("licensed_content"),
         F.current_timestamp().alias("silver_ingestion_timestamp"),
     )
+
+
+def build_api_videos_path(args: dict[str, str]) -> str:
+    """Build the API input path, narrowed to one date/hour batch when provided."""
+    prefix = args["api_videos_prefix"].strip("/")
+    if args["process_date"] and args["process_hour"]:
+        return (
+            f"s3://{args['bronze_bucket']}/{prefix}/"
+            f"region=*/date={args['process_date']}/hour={args['process_hour']}"
+        )
+    return s3_path(args["bronze_bucket"], prefix)

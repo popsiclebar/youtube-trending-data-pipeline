@@ -7,7 +7,8 @@ This area will handle:
 - Kaggle trending video CSV to Silver Parquet.
 - YouTube API trending video JSON to Silver Parquet.
 - Schema alignment between historical Kaggle data and live API data.
-- Partitioned Silver outputs under `youtube/videos/source=.../region=...`.
+- Partitioned Silver outputs under
+  `youtube/videos/source=.../region=.../trending_date=...`.
 
 The category/reference JSON transform stays in Lambda because it is small and
 simple. Video transforms belong in Glue because they can grow larger and need
@@ -28,7 +29,7 @@ The job standardizes both sources into the same Silver video schema and writes
 Parquet to:
 
 ```text
-s3://<silver-bucket>/youtube/videos/source=<source>/region=<region>/...
+s3://<silver-bucket>/youtube/videos/source=<source>/region=<region>/trending_date=<date>/...
 ```
 
 ## Required Arguments
@@ -44,17 +45,36 @@ s3://<silver-bucket>/youtube/videos/source=<source>/region=<region>/...
 ```text
 --BRONZE_DATABASE=youtube_bronze
 --SILVER_DATABASE=youtube_silver
+--SILVER_VIDEOS_TABLE=clean_video_statistics
 --SOURCE=all|kaggle|youtube_api
---KAGGLE_RAW_PREFIX=youtube/raw
+--KAGGLE_RAW_PREFIX=youtube/kaggle_raw/raw
 --API_VIDEOS_PREFIX=youtube/api_raw/videos
 --SILVER_VIDEOS_PREFIX=youtube/videos
+--PROCESS_DATE=<optional-yyyy-mm-dd>
+--PROCESS_HOUR=<optional-hh>
 --SNS_TOPIC_ARN=<optional-sns-topic-arn>
 --MAX_INVALID_ROW_RATIO=0.05
 ```
 
 The database names keep the job aligned with the Glue Data Catalog. The current
-job writes Parquet to S3 first; Silver table creation can be done later with a
-Crawler or explicit table definition after the output schema is validated.
+job writes Parquet through a Glue Catalog sink, updating
+`clean_video_statistics` with `source`, `region`, and `trending_date`
+partitions.
+
+For YouTube API runs, `PROCESS_DATE` and `PROCESS_HOUR` limit the read to one
+Bronze API batch:
+
+```text
+s3://<bronze-bucket>/youtube/api_raw/videos/region=*/date=<PROCESS_DATE>/hour=<PROCESS_HOUR>/
+```
+
+The job keeps `batch_hour` as a normal lineage column instead of a partition
+folder. Rerunning the same source/region/date can overwrite that daily
+partition, while avoiding hour-level over-partitioning.
+
+Before writing, the job purges only the exact `source`/`region`/`trending_date`
+partitions present in the current clean DataFrame. This keeps reruns idempotent
+without deleting unrelated regions or dates.
 
 ## Deployment Note
 
@@ -73,7 +93,8 @@ The job applies Silver quality rules in four stages:
 3. Quality checks: the job measures missing critical fields, missing context
    fields, negative numeric metrics, invalid-row ratio, and output row counts.
 4. Deduplication: duplicate rows are resolved by `source`, `region`,
-   `video_id`, and observed date, keeping the most recent available record.
+   `video_id`, observed date, and `batch_hour`, keeping the most recent
+   available record.
 
 Required Silver fields:
 
@@ -83,6 +104,8 @@ Required Silver fields:
   for Kaggle data.
 - `trending_date`: the date the video was observed as trending. For API data,
   this comes from the Bronze S3 key, not from the JSON body.
+- `batch_hour`: `historical` for Kaggle data, or the Bronze `hour=` partition
+  for YouTube API data.
 - `published_at`: Kaggle `publish_time` or YouTube API `snippet.publishedAt`.
 
 `dislike_count` is nullable because the YouTube API response does not provide

@@ -9,6 +9,7 @@ import pandas as pd
 logger = logging.getLogger()
 
 s3 = boto3.client("s3")
+glue = boto3.client("glue")
 
 
 def read_s3_object(bucket: str, key: str) -> bytes:
@@ -41,3 +42,58 @@ def write_parquet_to_s3(
 
     s3.put_object(**put_args)
     logger.info("Wrote s3://%s/%s (%d rows)", bucket, key, len(df))
+
+
+def register_category_partition(
+    database_name: str,
+    table_name: str,
+    silver_bucket: str,
+    categories_prefix: str,
+    source: str,
+    region: str,
+) -> None:
+    """Register one source/region category partition in the Glue Catalog."""
+    location = (
+        f"s3://{silver_bucket}/{categories_prefix.strip('/')}/"
+        f"source={source}/region={region}/"
+    )
+    partition_input = {
+        "Values": [source, region],
+        "StorageDescriptor": {
+            "Columns": [
+                {"Name": "category_id", "Type": "int"},
+                {"Name": "category_title", "Type": "string"},
+                {"Name": "channel_id", "Type": "string"},
+                {"Name": "assignable", "Type": "boolean"},
+            ],
+            "Location": location,
+            "InputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
+            "OutputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
+            "SerdeInfo": {
+                "SerializationLibrary": "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe",
+                "Parameters": {"serialization.format": "1"},
+            },
+        },
+    }
+
+    try:
+        glue.create_partition(
+            DatabaseName=database_name,
+            TableName=table_name,
+            PartitionInput=partition_input,
+        )
+        logger.info(
+            "Registered Glue partition %s.%s/%s/%s",
+            database_name,
+            table_name,
+            source,
+            region,
+        )
+    except glue.exceptions.AlreadyExistsException:
+        logger.info(
+            "Glue partition already exists: %s.%s/%s/%s",
+            database_name,
+            table_name,
+            source,
+            region,
+        )

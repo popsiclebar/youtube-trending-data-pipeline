@@ -48,7 +48,7 @@ Parameters:
 
   KaggleRawPrefix:
     Type: String
-    Default: youtube/raw
+    Default: youtube/kaggle_raw/raw
     Description: Bronze prefix containing Kaggle video CSV files.
 
   ApiVideosPrefix:
@@ -60,6 +60,21 @@ Parameters:
     Type: String
     Default: youtube/videos
     Description: Silver output prefix for video Parquet files.
+
+  SilverVideosTableName:
+    Type: String
+    Default: clean_video_statistics
+    Description: Silver Glue table for cleaned video statistics.
+
+  ProcessDate:
+    Type: String
+    Default: ""
+    Description: Optional yyyy-mm-dd Bronze API date partition to process.
+
+  ProcessHour:
+    Type: String
+    Default: ""
+    Description: Optional HH Bronze API hour partition to process.
 
   SnsAlertTopicArn:
     Type: String
@@ -135,6 +150,19 @@ Resources:
                   - s3:PutObject
                   - s3:DeleteObject
                 Resource: !Sub "arn:${AWS::Partition}:s3:::${SilverBucketName}/${SilverVideosPrefix}/*"
+              - Sid: UpdateSilverGlueCatalog
+                Effect: Allow
+                Action:
+                  - glue:BatchCreatePartition
+                  - glue:CreatePartition
+                  - glue:CreateTable
+                  - glue:GetDatabase
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                  - glue:GetTable
+                  - glue:UpdatePartition
+                  - glue:UpdateTable
+                Resource: "*"
               - Sid: ListDataBuckets
                 Effect: Allow
                 Action:
@@ -151,6 +179,83 @@ Resources:
                     - sns:Publish
                   Resource: !Ref SnsAlertTopicArn
                 - !Ref AWS::NoValue
+
+  CleanVideoStatisticsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref SilverDatabaseName
+      TableInput:
+        Name: !Ref SilverVideosTableName
+        Description: Cleaned Silver video statistics.
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          EXTERNAL: "TRUE"
+        PartitionKeys:
+          - Name: source
+            Type: string
+          - Name: region
+            Type: string
+          - Name: trending_date
+            Type: date
+        StorageDescriptor:
+          Location: !Sub "s3://${SilverBucketName}/${SilverVideosPrefix}/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          Compressed: false
+          NumberOfBuckets: -1
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+            Parameters:
+              serialization.format: "1"
+          Columns:
+            - Name: video_id
+              Type: string
+            - Name: batch_hour
+              Type: string
+            - Name: published_at
+              Type: timestamp
+            - Name: channel_id
+              Type: string
+            - Name: channel_title
+              Type: string
+            - Name: title
+              Type: string
+            - Name: description
+              Type: string
+            - Name: category_id
+              Type: int
+            - Name: tags
+              Type: array<string>
+            - Name: view_count
+              Type: bigint
+            - Name: like_count
+              Type: bigint
+            - Name: dislike_count
+              Type: bigint
+            - Name: favorite_count
+              Type: bigint
+            - Name: comment_count
+              Type: bigint
+            - Name: thumbnail_url
+              Type: string
+            - Name: comments_disabled
+              Type: boolean
+            - Name: ratings_disabled
+              Type: boolean
+            - Name: video_error_or_removed
+              Type: boolean
+            - Name: duration
+              Type: string
+            - Name: definition
+              Type: string
+            - Name: caption
+              Type: boolean
+            - Name: licensed_content
+              Type: boolean
+            - Name: silver_ingestion_timestamp
+              Type: timestamp
 
   SilverVideoGlueJob:
     Type: AWS::Glue::Job
@@ -175,10 +280,13 @@ Resources:
         "--SILVER_BUCKET": !Ref SilverBucketName
         "--BRONZE_DATABASE": !Ref BronzeDatabaseName
         "--SILVER_DATABASE": !Ref SilverDatabaseName
+        "--SILVER_VIDEOS_TABLE": !Ref SilverVideosTableName
         "--SOURCE": !Ref Source
         "--KAGGLE_RAW_PREFIX": !Ref KaggleRawPrefix
         "--API_VIDEOS_PREFIX": !Ref ApiVideosPrefix
         "--SILVER_VIDEOS_PREFIX": !Ref SilverVideosPrefix
+        "--PROCESS_DATE": !Ref ProcessDate
+        "--PROCESS_HOUR": !Ref ProcessHour
         "--SNS_TOPIC_ARN": !Ref SnsAlertTopicArn
         "--MAX_INVALID_ROW_RATIO": !Ref MaxInvalidRowRatio
 

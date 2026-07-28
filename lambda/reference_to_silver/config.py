@@ -9,7 +9,9 @@ class Settings:
     """Environment-driven settings used by the Lambda handler and transform."""
 
     silver_bucket: str
-    reference_prefix: str = "youtube/raw_reference_data/"
+    silver_database: str = "youtube_silver"
+    categories_table: str = "clean_category_data"
+    reference_prefix: str = "youtube/kaggle_raw/raw_reference_data/"
     api_categories_prefix: str = "youtube/api_raw/categories/"
     categories_output_prefix: str = "youtube/categories/"
     sns_topic_arn: str = ""
@@ -40,7 +42,11 @@ def load_settings() -> Settings:
     """Create settings once when the Lambda runtime starts."""
     return Settings(
         silver_bucket=required_env("SILVER_BUCKET"),
-        reference_prefix=env_prefix("REFERENCE_PREFIX", "youtube/raw_reference_data"),
+        silver_database=optional_env("SILVER_DATABASE") or "youtube_silver",
+        categories_table=optional_env("CATEGORIES_TABLE") or "clean_category_data",
+        reference_prefix=env_prefix(
+            "REFERENCE_PREFIX", "youtube/kaggle_raw/raw_reference_data"
+        ),
         api_categories_prefix=env_prefix(
             "API_CATEGORIES_PREFIX", "youtube/api_raw/categories"
         ),

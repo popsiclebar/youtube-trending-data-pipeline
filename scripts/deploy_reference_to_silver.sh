@@ -10,10 +10,12 @@ TEMPLATE_FILE="${ROOT_DIR}/infra/cloudformation/reference-to-silver-lambda.yaml"
 STACK_NAME="${STACK_NAME:-yt-reference-to-silver-lambda}"
 FUNCTION_NAME="${FUNCTION_NAME:-yt-reference-to-silver}"
 AWS_REGION="${AWS_REGION:-$(aws configure get region)}"
-REFERENCE_PREFIX="${REFERENCE_PREFIX:-youtube/raw_reference_data}"
+REFERENCE_PREFIX="${REFERENCE_PREFIX:-youtube/kaggle_raw/raw_reference_data}"
 API_CATEGORIES_PREFIX="${API_CATEGORIES_PREFIX:-youtube/api_raw/categories}"
 CATEGORIES_OUTPUT_PREFIX="${CATEGORIES_OUTPUT_PREFIX:-youtube/categories}"
 SNS_TOPIC_ARN="${SNS_TOPIC_ARN:-}"
+SILVER_DATABASE="${SILVER_DATABASE:-youtube_silver}"
+CATEGORIES_TABLE="${CATEGORIES_TABLE:-clean_category_data}"
 LAMBDA_MEMORY_SIZE="${LAMBDA_MEMORY_SIZE:-1024}"
 LAMBDA_TIMEOUT="${LAMBDA_TIMEOUT:-300}"
 
@@ -39,7 +41,7 @@ fi
 
 if [[ -z "${AWS_SDK_PANDAS_LAYER_ARN:-}" ]]; then
   if [[ "${AWS_REGION}" == "eu-north-1" ]]; then
-    AWS_SDK_PANDAS_LAYER_ARN="arn:aws:lambda:eu-north-1:336392948345:layer:AWSSDKPandas-Python312:29"
+    AWS_SDK_PANDAS_LAYER_ARN="arn:aws:lambda:eu-north-1:336392948345:layer:AWSSDKPandas-Python311:33"
   else
     echo "AWS_SDK_PANDAS_LAYER_ARN is required outside eu-north-1." >&2
     exit 1
@@ -80,6 +82,8 @@ aws cloudformation deploy \
     AwsSdkPandasLayerArn="${AWS_SDK_PANDAS_LAYER_ARN}" \
     BronzeBucketName="${BRONZE_BUCKET}" \
     SilverBucketName="${SILVER_BUCKET}" \
+    SilverDatabaseName="${SILVER_DATABASE}" \
+    CategoriesTableName="${CATEGORIES_TABLE}" \
     ReferencePrefix="${REFERENCE_PREFIX}" \
     ApiCategoriesPrefix="${API_CATEGORIES_PREFIX}" \
     CategoriesOutputPrefix="${CATEGORIES_OUTPUT_PREFIX}" \
