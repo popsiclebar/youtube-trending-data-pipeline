@@ -401,11 +401,73 @@ while the AWS foundation is evolving. The YouTube API batch flow now has an
 initial Step Functions template, but the ingestion Lambda itself is still
 packaged separately.
 
+## Silver data-quality gate
+
+The `data_quality` Lambda validates one daily Silver batch before Gold starts.
+It uses small Athena aggregate queries rather than loading Parquet data into
+Lambda memory. With no invocation overrides, it checks the newest
+`youtube_api` video date for the regions configured in `DEFAULT_REGIONS`.
+
+The default gate validates:
+
+- Glue table schemas;
+- minimum video and category row counts;
+- critical null fields and negative video metrics;
+- duplicates at `region + date + batch_hour + video_id` for videos and
+  `region + date + category_id` for categories;
+- Silver freshness and expected region coverage;
+- expected hourly coverage when `EXPECTED_HOURS` is configured; and
+- video-to-category mapping at the same source, region, and date.
+
+An invocation can narrow the scope or select checks without accepting table
+names or arbitrary SQL from the event:
+
+```json
+{
+  "source": "youtube_api",
+  "process_date": "2026-08-06",
+  "regions": ["ca", "gb", "us"],
+  "expected_hours": ["00", "01", "02"],
+  "checks": [
+    "video_rows",
+    "video_duplicates",
+    "category_rows",
+    "category_mapping"
+  ]
+}
+```
+
+`process_date`, `regions`, `expected_hours`, and `checks` are optional. An empty
+`EXPECTED_HOURS` setting intentionally skips hourly completeness while testing;
+the daily Step Functions execution should pass the hours it expects after the
+hourly schedule is enabled.
+
+The Lambda returns `quality_passed: true` or `false` for a Step Functions Choice
+state. Failed data checks return normally and publish an SNS alert; Athena,
+configuration, and permission errors raise an exception so Step Functions can
+retry or catch them. Required environment variables are:
+
+```text
+ATHENA_OUTPUT_LOCATION=s3://<silver-bucket>/athena-results/data-quality/
+SILVER_DATABASE=yt-pipeline-silver-test
+VIDEO_TABLE=clean_video_statistics
+CATEGORY_TABLE=clean_category_data
+ATHENA_WORKGROUP=primary
+DEFAULT_SOURCE=youtube_api
+DEFAULT_REGIONS=ca,gb,us
+EXPECTED_HOURS=
+SNS_TOPIC_ARN=<topic-arn>
+```
+
+The Lambda role needs Athena start/status/result access, Glue table and
+partition reads, Silver object reads, `s3:PutObject` for Athena results,
+`s3:ListBucket`, `s3:GetBucketLocation`, and `sns:Publish` on the topic ARN.
+
 ## Roadmap
 
 - Add Infrastructure as Code for the YouTube API ingestion Lambda.
 - Enable the Step Functions EventBridge schedule after testing.
 - Add S3 event triggers for Reference-to-Silver transformation.
-- Add data quality checks before Gold processing.
+- Add the data-quality Lambda to the Step Functions orchestration.
 - Build Gold aggregation jobs for trending, channel, and category analytics.
 - Add Athena queries and optional QuickSight dashboarding.
