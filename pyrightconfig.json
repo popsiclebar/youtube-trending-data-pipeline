@@ -1,0 +1,23 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.11",
+  "stubPath": "typings",
+  "executionEnvironments": [
+    {
+      "root": "lambda/youtube_api_ingestion",
+      "extraPaths": ["lambda/youtube_api_ingestion"]
+    },
+    {
+      "root": "lambda/reference_to_silver",
+      "extraPaths": ["lambda/reference_to_silver"]
+    },
+    {
+      "root": "glue/silver_video_transforms",
+      "extraPaths": ["glue/silver_video_transforms"]
+    },
+    {
+      "root": "."
+    }
+  ]
+}

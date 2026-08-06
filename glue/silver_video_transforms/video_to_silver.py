@@ -12,8 +12,8 @@ import logging
 import boto3
 from awsglue.context import GlueContext
 from awsglue.dynamicframe import DynamicFrame
+from pyspark import SparkContext
 from pyspark.sql import DataFrame
-from pyspark.context import SparkContext
 
 from config import load_args, s3_path
 from quality import apply_quality_checks
@@ -70,7 +70,7 @@ def write_silver_videos(
         path=output_path,
         enableUpdateCatalog=True,
         updateBehavior="UPDATE_IN_DATABASE",
-        partitionKeys=["source", "region", "trending_date"],
+        partitionKeys=["source", "region", "date"],
     )
     sink.setCatalogInfo(
         catalogDatabase=args["silver_database"],
@@ -90,11 +90,11 @@ def purge_silver_partitions(
     glue_context: GlueContext, df: DataFrame, output_path: str
 ) -> None:
     """Delete existing files for the exact daily partitions being rewritten."""
-    partition_rows = df.select("source", "region", "trending_date").distinct().collect()
+    partition_rows = df.select("source", "region", "date").distinct().collect()
     for row in partition_rows:
         partition_path = (
             f"{output_path}/source={row['source']}/region={row['region']}/"
-            f"trending_date={row['trending_date']}/"
+            f"date={row['date']}/"
         )
         glue_context.purge_s3_path(partition_path, {"retentionPeriod": 0})
         logger.info("Purged existing Silver partition: %s", partition_path)

@@ -3,7 +3,7 @@ Data cleansing, quality checks, and deduplication helpers.
 
 Silver is the contract layer for downstream analytics, so this file makes the
 quality work explicit while respecting the source differences:
-- Kaggle has `trending_date` and `dislikes` in the CSV.
+- Kaggle has a raw `trending_date` field and `dislikes` in the CSV.
 - YouTube API has `publishedAt`, but no `dislikeCount`.
 - YouTube API region and observed trending date come from the S3 key.
 """
@@ -21,7 +21,7 @@ REQUIRED_VIDEO_FIELDS = ["video_id", "category_id"]
 REQUIRED_OBSERVATION_FIELDS = [
     "source",
     "region",
-    "trending_date",
+    "date",
     "batch_hour",
     "published_at",
 ]
@@ -99,7 +99,7 @@ def apply_quality_checks(
 def cleanse_video_data(df: DataFrame) -> DataFrame:
     """Normalize common fields before validation and writing."""
     clean_df = df.withColumn("source", F.lower(F.trim(F.col("source")))).withColumn(
-        "region", F.upper(F.trim(F.col("region")))
+        "region", F.lower(F.trim(F.col("region")))
     )
 
     for column_name in TEXT_COLUMNS:
@@ -129,7 +129,7 @@ def collect_quality_metrics(
         "video_id": df.filter(F.col("video_id").isNull()).count(),
         "category_id": df.filter(F.col("category_id").isNull()).count(),
         "region": df.filter(F.col("region").isNull()).count(),
-        "trending_date": df.filter(F.col("trending_date").isNull()).count(),
+        "date": df.filter(F.col("date").isNull()).count(),
         "batch_hour": df.filter(F.col("batch_hour").isNull()).count(),
         "published_at": df.filter(F.col("published_at").isNull()).count(),
         "title": df.filter(F.col("title").isNull()).count(),
@@ -168,15 +168,18 @@ def fail_on_quality_thresholds(metrics: dict[str, object], args: dict[str, str])
 def deduplicate_videos(df: DataFrame) -> DataFrame:
     """Keep one record for each source, region, video, date, and batch hour."""
     window = Window.partitionBy(
-        "source", "region", "video_id", "trending_date", "batch_hour"
+        "source", "region", "video_id", "date", "batch_hour"
     ).orderBy(
         F.col("published_at").desc_nulls_last(),
+        # Legacy Bronze hours can contain multiple run-id files. Their timestamped
+        # keys, and the new deterministic videos.json key, provide a stable tie-break.
+        F.col("_source_file").desc_nulls_last(),
         F.col("silver_ingestion_timestamp").desc_nulls_last(),
     )
     return (
         df.withColumn("_dedup_rank", F.row_number().over(window))
         .filter(F.col("_dedup_rank") == 1)
-        .drop("_dedup_rank")
+        .drop("_dedup_rank", "_source_file")
     )
 
 

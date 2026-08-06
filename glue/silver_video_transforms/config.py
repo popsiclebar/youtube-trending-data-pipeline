@@ -6,6 +6,7 @@ Glue passes job settings as command-line arguments such as
 ETL business logic.
 """
 
+from datetime import date
 import sys
 
 from awsglue.utils import getResolvedOptions
@@ -31,7 +32,6 @@ def load_args() -> dict[str, str]:
             "SILVER_VIDEOS_TABLE", "clean_video_statistics"
         ),
         "process_date": optional_arg("PROCESS_DATE", ""),
-        "process_hour": optional_arg("PROCESS_HOUR", ""),
         "sns_topic_arn": optional_arg("SNS_TOPIC_ARN", ""),
         "max_invalid_row_ratio": optional_arg("MAX_INVALID_ROW_RATIO", "0.05"),
     }
@@ -40,8 +40,8 @@ def load_args() -> dict[str, str]:
         raise ValueError("SOURCE must be one of: kaggle, youtube_api, all")
     if not 0 <= float(args["max_invalid_row_ratio"]) <= 1:
         raise ValueError("MAX_INVALID_ROW_RATIO must be between 0 and 1")
-    if bool(args["process_date"]) != bool(args["process_hour"]):
-        raise ValueError("PROCESS_DATE and PROCESS_HOUR must be provided together")
+    if args["process_date"]:
+        date.fromisoformat(args["process_date"])
 
     return args
 

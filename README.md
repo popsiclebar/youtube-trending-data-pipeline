@@ -28,7 +28,7 @@ Data Sources
     Silver Layer: Amazon S3             # Cleansed, typed, standardized Parquet
     |
     |-- youtube/categories/source=.../region=...
-    `-- youtube/videos/source=.../region=...       # Planned Glue output
+    `-- youtube/videos/source=.../region=.../date=...
         |
         v
     Data Quality Gate                   # Planned validation before Gold
@@ -120,8 +120,9 @@ Implemented so far:
 
 - Kaggle source files for 10 regions: CA, DE, FR, GB, IN, JP, KR, MX, RU, US.
 - Parameterized upload script for loading Kaggle files into Bronze S3.
-- YouTube API ingestion Lambda code for writing raw video/category JSON to
-  Bronze S3. Deployment and scheduling are still manual/planned.
+- Dataset-selectable YouTube API ingestion Lambda for hourly video snapshots and
+  daily category snapshots in Bronze S3. Scheduled writes use deterministic
+  object keys so retries replace the same logical batch.
 - Reference-to-Silver Lambda for converting Kaggle and YouTube API category JSON
   into source-partitioned Silver Parquet.
 - Zip-based deployment path for the Reference-to-Silver Lambda using the AWS SDK
@@ -147,16 +148,28 @@ s3://<bronze-bucket>/youtube/api_raw/categories/region=<region>/date=<yyyy-mm-dd
 Silver output layout:
 
 ```text
-s3://<silver-bucket>/youtube/videos/source=kaggle/region=<region>/trending_date=<date>/...
-s3://<silver-bucket>/youtube/videos/source=youtube_api/region=<region>/trending_date=<date>/...
-s3://<silver-bucket>/youtube/categories/source=kaggle/region=<region>/...
-s3://<silver-bucket>/youtube/categories/source=youtube_api/region=<region>/...
+s3://<silver-bucket>/youtube/videos/source=kaggle/region=<region>/date=<date>/...
+s3://<silver-bucket>/youtube/videos/source=youtube_api/region=<region>/date=<date>/...
+s3://<silver-bucket>/youtube/categories/source=kaggle/region=<region>/categories_historical.parquet
+s3://<silver-bucket>/youtube/categories/source=youtube_api/region=<region>/categories_<date>.parquet
 ```
 
 The `source` partition keeps lineage visible in Silver while allowing downstream
-Glue and Athena jobs to compare or combine sources intentionally. Video data is
-also partitioned by `trending_date`, which makes daily reruns idempotent without
-partitioning down to the hour.
+Glue and Athena jobs to compare or combine sources intentionally. All region
+partition values are lowercase. Video data is partitioned by `date`, which
+makes daily reruns idempotent without partitioning down to the hour. Category
+files store `date` as a normal column and use one deterministic file per day
+inside each `source`/`region` partition.
+
+Existing deployments need a controlled backfill for this layout change. Legacy
+Silver videos under uppercase `region=` and `trending_date=` paths are not moved
+or deleted automatically. Older category Parquet files remain readable but have
+a null `date` until their Bronze inputs are reprocessed. Validate the new
+lowercase `region=`/`date=` outputs before archiving any legacy objects.
+
+When joining daily API videos to category snapshots, use the complete
+`source`/`region`/`date`/`category_id` key. A join on `category_id` alone can
+multiply video rows across regions and snapshot dates.
 
 ## Glue Catalog And Athena Strategy
 
@@ -185,8 +198,8 @@ clean_video_statistics
 Both Silver tables are defined by CloudFormation. The category Lambda registers
 `source`/`region` partitions after writing Parquet. The video Glue job writes
 through a Glue Catalog sink and updates `clean_video_statistics` with `source`,
-`region`, and `trending_date` partitions. Before each write, it deletes the
-exact daily partitions being rewritten so reruns do not append duplicate files.
+`region`, and `date` partitions. Before each write, it deletes the exact daily
+partitions being rewritten so reruns do not append duplicate files.
 
 ## Configuration
 
@@ -203,6 +216,12 @@ REGION_CODES=CA,DE,FR,GB,IN,JP,KR,MX,RU,US
 MAX_RESULTS=50
 SNS_TOPIC_ARN=<optional-sns-topic-arn>
 ```
+
+The invocation event can select the datasets independently. Hourly video
+ingestion uses `{"fetch_videos": true, "fetch_categories": false}`; daily
+category ingestion uses `{"fetch_videos": false, "fetch_categories": true}`.
+When provided, EventBridge's `time` field or `scheduled_time` determines the
+logical Bronze date/hour.
 
 Reference-to-Silver Lambda:
 
@@ -229,15 +248,16 @@ KAGGLE_RAW_PREFIX=youtube/kaggle_raw/raw
 API_VIDEOS_PREFIX=youtube/api_raw/videos
 SILVER_VIDEOS_PREFIX=youtube/videos
 PROCESS_DATE=<optional-yyyy-mm-dd>
-PROCESS_HOUR=<optional-hh>
 SNS_TOPIC_ARN=<optional-sns-topic-arn>
 MAX_INVALID_ROW_RATIO=0.05
 ```
 
-Category Silver Parquet objects include S3 object metadata such as source,
-dataset, region, record count, ingestion timestamp, and the original Bronze
-object. The Silver video Glue job keeps lineage in table columns and partitions,
-including `source`, `region`, and `silver_ingestion_timestamp`.
+Category Silver Parquet objects include a `date` column plus S3 object metadata
+such as source, dataset, region, record count, ingestion timestamp, and the
+original Bronze object. Static Kaggle category references use
+`date=historical`. The Silver video Glue job keeps lineage in table columns and
+partitions, including `source`, `region`, `date`, and
+`silver_ingestion_timestamp`.
 
 ## Deployment
 
@@ -326,23 +346,21 @@ export SOURCE=kaggle
 export SOURCE=youtube_api
 ```
 
-For incremental YouTube API processing, pass the Bronze API batch partition:
+For daily YouTube API processing, pass the Bronze API date partition:
 
 ```bash
 export SOURCE=youtube_api
 export PROCESS_DATE=2026-07-28
-export PROCESS_HOUR=10
 ```
 
-The job cleans common fields, measures data quality, fails when critical error
-rates are too high, deduplicates by `source`, `region`, `video_id`, observed
-date, and `batch_hour`, writes partitioned Parquet through the Glue sink, and
-sends an SNS alert on failure when `SNS_TOPIC_ARN` is configured. For YouTube
-API data, observed date, batch hour, and region come from the Bronze S3 key;
-`published_at` comes from the JSON payload.
+The job reads every region and hour under `PROCESS_DATE`, cleans common fields,
+measures data quality, fails when critical error rates are too high, deduplicates
+by `source`, `region`, `video_id`, date, and `batch_hour`, then rewrites the
+complete daily Silver partitions. For YouTube API data, date, batch hour, and
+region come from the Bronze S3 key; `published_at` comes from the JSON payload.
 
 The YouTube API batch pipeline is deployed with Step Functions. It runs
-ingestion, starts the Silver video Glue job for the new date/hour batch, waits
+ingestion, starts the Silver video Glue job for the complete date, waits
 for completion, and sends SNS notifications:
 
 ```bash

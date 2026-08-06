@@ -35,10 +35,9 @@ def build_s3_metadata(
 def build_videos_key(
     region_code: str,
     run_timestamp: datetime,
-    run_id: str,
     settings: Settings,
 ) -> str:
-    """Build a partitioned Bronze S3 key for raw trending video API responses."""
+    """Build an idempotent hourly Bronze key for trending video API data."""
     date_partition = run_timestamp.strftime("%Y-%m-%d")
     hour_partition = run_timestamp.strftime("%H")
     region = region_code.lower()
@@ -47,24 +46,23 @@ def build_videos_key(
         f"region={region}/"
         f"date={date_partition}/"
         f"hour={hour_partition}/"
-        f"{run_id}.json"
+        "videos.json"
     )
 
 
 def build_categories_key(
     region_code: str,
     run_timestamp: datetime,
-    run_id: str,
     settings: Settings,
 ) -> str:
-    """Build a partitioned Bronze S3 key for raw category reference data."""
+    """Build an idempotent daily Bronze key for category reference data."""
     date_partition = run_timestamp.strftime("%Y-%m-%d")
     region = region_code.lower()
     return (
         f"{settings.categories_prefix}/"
         f"region={region}/"
         f"date={date_partition}/"
-        f"category_id_{run_id}.json"
+        "categories.json"
     )
 
 

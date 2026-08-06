@@ -65,6 +65,7 @@ def register_category_partition(
                 {"Name": "category_title", "Type": "string"},
                 {"Name": "channel_id", "Type": "string"},
                 {"Name": "assignable", "Type": "boolean"},
+                {"Name": "date", "Type": "string"},
             ],
             "Location": location,
             "InputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
@@ -90,8 +91,14 @@ def register_category_partition(
             region,
         )
     except glue.exceptions.AlreadyExistsException:
+        glue.update_partition(
+            DatabaseName=database_name,
+            TableName=table_name,
+            PartitionValueList=[source, region],
+            PartitionInput=partition_input,
+        )
         logger.info(
-            "Glue partition already exists: %s.%s/%s/%s",
+            "Updated existing Glue partition: %s.%s/%s/%s",
             database_name,
             table_name,
             source,

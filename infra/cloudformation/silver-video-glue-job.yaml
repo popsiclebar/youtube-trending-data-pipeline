@@ -71,11 +71,6 @@ Parameters:
     Default: ""
     Description: Optional yyyy-mm-dd Bronze API date partition to process.
 
-  ProcessHour:
-    Type: String
-    Default: ""
-    Description: Optional HH Bronze API hour partition to process.
-
   SnsAlertTopicArn:
     Type: String
     Default: ""
@@ -197,7 +192,7 @@ Resources:
             Type: string
           - Name: region
             Type: string
-          - Name: trending_date
+          - Name: date
             Type: date
         StorageDescriptor:
           Location: !Sub "s3://${SilverBucketName}/${SilverVideosPrefix}/"
@@ -286,7 +281,6 @@ Resources:
         "--API_VIDEOS_PREFIX": !Ref ApiVideosPrefix
         "--SILVER_VIDEOS_PREFIX": !Ref SilverVideosPrefix
         "--PROCESS_DATE": !Ref ProcessDate
-        "--PROCESS_HOUR": !Ref ProcessHour
         "--SNS_TOPIC_ARN": !Ref SnsAlertTopicArn
         "--MAX_INVALID_ROW_RATIO": !Ref MaxInvalidRowRatio
 

@@ -44,9 +44,11 @@ def env_value(name: str, default: str) -> str:
     return os.environ.get(name, default).strip()
 
 
-def parse_bool(value: str) -> bool:
+def parse_bool(value: str | bool) -> bool:
     """Convert friendly string values like true/false into a Python bool."""
-    return value.strip().lower() in {"1", "true", "yes", "y"}
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
 def parse_region_codes(value: str) -> tuple[str, ...]:

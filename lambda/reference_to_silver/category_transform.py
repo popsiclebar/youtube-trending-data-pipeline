@@ -10,6 +10,7 @@ from config import Settings
 from s3_io import read_s3_object, register_category_partition, write_parquet_to_s3
 
 REGION_PATTERN = re.compile(r"region=([a-z]{2})")
+DATE_PATTERN = re.compile(r"date=([0-9]{4}-[0-9]{2}-[0-9]{2})")
 
 
 def transform_category_json(
@@ -20,6 +21,7 @@ def transform_category_json(
 ) -> str:
     """Convert one category JSON file into a flat Silver Parquet lookup table."""
     region = extract_region(bronze_key)
+    date = extract_date(bronze_key, source)
     payload = json.loads(read_s3_object(bronze_bucket, bronze_key))
     items = payload.get("items", [])
     if not isinstance(items, list):
@@ -32,6 +34,7 @@ def transform_category_json(
             {
                 "source": source,
                 "region": region,
+                "date": date,
                 "category_id": int(item["id"]),
                 "category_title": snippet.get("title"),
                 "channel_id": snippet.get("channelId"),
@@ -44,6 +47,7 @@ def transform_category_json(
         columns=[
             "source",
             "region",
+            "date",
             "category_id",
             "category_title",
             "channel_id",
@@ -51,12 +55,14 @@ def transform_category_json(
         ],
     )
     validate_category_silver(df, source)
-    df = df.drop_duplicates(subset=["source", "region", "category_id"], keep="last")
+    df = df.drop_duplicates(
+        subset=["source", "region", "date", "category_id"], keep="last"
+    )
     df["category_id"] = df["category_id"].astype("Int64")
 
-    filename = bronze_key.rsplit("/", 1)[-1].replace(".json", ".parquet")
     silver_key = (
-        f"{settings.categories_output_prefix}source={source}/region={region}/{filename}"
+        f"{settings.categories_output_prefix}source={source}/region={region}/"
+        f"categories_{date}.parquet"
     )
     parquet_df = df.drop(columns=["source", "region"])
     write_parquet_to_s3(
@@ -68,6 +74,7 @@ def transform_category_json(
             "source": source,
             "dataset": "categories",
             "region": region,
+            "date": date,
             "record-count": str(len(parquet_df)),
             "ingestion-timestamp": datetime.now(UTC).isoformat(),
             "bronze-bucket": bronze_bucket,
@@ -90,6 +97,17 @@ def extract_region(s3_key: str) -> str:
     match = REGION_PATTERN.search(s3_key)
     if not match:
         raise ValueError(f"Could not find region partition in key: {s3_key}")
+    return match.group(1).lower()
+
+
+def extract_date(s3_key: str, source: str) -> str:
+    """Use the API date partition, or `historical` for static Kaggle references."""
+    if source == "kaggle":
+        return "historical"
+
+    match = DATE_PATTERN.search(s3_key)
+    if not match:
+        raise ValueError(f"Could not find date partition in API category key: {s3_key}")
     return match.group(1)
 
 

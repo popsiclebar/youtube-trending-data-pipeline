@@ -53,7 +53,7 @@ def transform_kaggle_videos(spark, args: dict[str, str]) -> DataFrame:
     )
 
     date_parts = F.split(F.col("trending_date"), "\\.")
-    trending_date = F.to_date(
+    observation_date = F.to_date(
         F.concat_ws(
             "-",
             F.concat(F.lit("20"), date_parts.getItem(0)),
@@ -66,7 +66,7 @@ def transform_kaggle_videos(spark, args: dict[str, str]) -> DataFrame:
         F.lit("kaggle").alias("source"),
         extract_region_from_path("_source_file").alias("region"),
         F.col("video_id"),
-        trending_date.alias("trending_date"),
+        observation_date.alias("date"),
         F.lit("historical").alias("batch_hour"),
         F.to_timestamp("publish_time").alias("published_at"),
         F.lit(None).cast("string").alias("channel_id"),
@@ -89,6 +89,7 @@ def transform_kaggle_videos(spark, args: dict[str, str]) -> DataFrame:
         F.lit(None).cast("boolean").alias("caption"),
         F.lit(None).cast("boolean").alias("licensed_content"),
         F.current_timestamp().alias("silver_ingestion_timestamp"),
+        F.col("_source_file"),
     )
 
 
@@ -109,8 +110,8 @@ def transform_api_videos(spark, args: dict[str, str]) -> DataFrame:
         F.lit("youtube_api").alias("source"),
         extract_region_from_path("_source_file").alias("region"),
         F.col("item.id").alias("video_id"),
-        # API JSON has no trending_date; this is the date observed in the S3 key.
-        extract_date_from_path("_source_file").alias("trending_date"),
+        # API JSON has no observation date; it comes from the Bronze S3 key.
+        extract_date_from_path("_source_file").alias("date"),
         extract_hour_from_path("_source_file").alias("batch_hour"),
         F.to_timestamp("item.snippet.publishedAt").alias("published_at"),
         F.col("item.snippet.channelId").alias("channel_id"),
@@ -136,15 +137,16 @@ def transform_api_videos(spark, args: dict[str, str]) -> DataFrame:
         .cast("boolean")
         .alias("licensed_content"),
         F.current_timestamp().alias("silver_ingestion_timestamp"),
+        F.col("_source_file"),
     )
 
 
 def build_api_videos_path(args: dict[str, str]) -> str:
-    """Build the API input path, narrowed to one date/hour batch when provided."""
+    """Build the API input path, narrowed to one complete date when provided."""
     prefix = args["api_videos_prefix"].strip("/")
-    if args["process_date"] and args["process_hour"]:
+    if args["process_date"]:
         return (
             f"s3://{args['bronze_bucket']}/{prefix}/"
-            f"region=*/date={args['process_date']}/hour={args['process_hour']}"
+            f"region=*/date={args['process_date']}/hour=*/*"
         )
     return s3_path(args["bronze_bucket"], prefix)

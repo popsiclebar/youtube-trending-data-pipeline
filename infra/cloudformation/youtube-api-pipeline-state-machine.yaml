@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Orchestrate YouTube API ingestion and incremental Silver video processing.
+Description: Orchestrate YouTube API ingestion and daily Silver video processing.
 
 Parameters:
   StateMachineName:
@@ -81,7 +81,7 @@ Resources:
       DefinitionString: !Sub
         - |
           {
-            "Comment": "YouTube API Bronze-to-Silver pipeline",
+            "Comment": "YouTube API Bronze-to-daily-Silver pipeline",
             "StartAt": "Run YouTube API Ingestion",
             "States": {
               "Run YouTube API Ingestion": {
@@ -119,8 +119,7 @@ Resources:
                   "JobName": "${SilverVideoGlueJobName}",
                   "Arguments": {
                     "--SOURCE": "youtube_api",
-                    "--PROCESS_DATE.$": "$.Ingestion.Payload.process_date",
-                    "--PROCESS_HOUR.$": "$.Ingestion.Payload.process_hour"
+                    "--PROCESS_DATE.$": "$.Ingestion.Payload.process_date"
                   }
                 },
                 "ResultPath": "$.SilverVideoGlue",

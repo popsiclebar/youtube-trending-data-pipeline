@@ -8,7 +8,7 @@ This area will handle:
 - YouTube API trending video JSON to Silver Parquet.
 - Schema alignment between historical Kaggle data and live API data.
 - Partitioned Silver outputs under
-  `youtube/videos/source=.../region=.../trending_date=...`.
+  `youtube/videos/source=.../region=.../date=...`.
 
 The category/reference JSON transform stays in Lambda because it is small and
 simple. Video transforms belong in Glue because they can grow larger and need
@@ -29,7 +29,7 @@ The job standardizes both sources into the same Silver video schema and writes
 Parquet to:
 
 ```text
-s3://<silver-bucket>/youtube/videos/source=<source>/region=<region>/trending_date=<date>/...
+s3://<silver-bucket>/youtube/videos/source=<source>/region=<region>/date=<date>/...
 ```
 
 ## Required Arguments
@@ -51,28 +51,27 @@ s3://<silver-bucket>/youtube/videos/source=<source>/region=<region>/trending_dat
 --API_VIDEOS_PREFIX=youtube/api_raw/videos
 --SILVER_VIDEOS_PREFIX=youtube/videos
 --PROCESS_DATE=<optional-yyyy-mm-dd>
---PROCESS_HOUR=<optional-hh>
 --SNS_TOPIC_ARN=<optional-sns-topic-arn>
 --MAX_INVALID_ROW_RATIO=0.05
 ```
 
 The database names keep the job aligned with the Glue Data Catalog. The current
 job writes Parquet through a Glue Catalog sink, updating
-`clean_video_statistics` with `source`, `region`, and `trending_date`
+`clean_video_statistics` with `source`, `region`, and `date`
 partitions.
 
-For YouTube API runs, `PROCESS_DATE` and `PROCESS_HOUR` limit the read to one
-Bronze API batch:
+For YouTube API runs, `PROCESS_DATE` reads every region and hourly Bronze object
+for one complete date:
 
 ```text
-s3://<bronze-bucket>/youtube/api_raw/videos/region=*/date=<PROCESS_DATE>/hour=<PROCESS_HOUR>/
+s3://<bronze-bucket>/youtube/api_raw/videos/region=*/date=<PROCESS_DATE>/hour=*/*
 ```
 
 The job keeps `batch_hour` as a normal lineage column instead of a partition
-folder. Rerunning the same source/region/date can overwrite that daily
-partition, while avoiding hour-level over-partitioning.
+folder. It rebuilds each affected daily partition from the full Bronze date, so
+rerunning the date is idempotent without losing observations from earlier hours.
 
-Before writing, the job purges only the exact `source`/`region`/`trending_date`
+Before writing, the job purges only the exact `source`/`region`/`date`
 partitions present in the current clean DataFrame. This keeps reruns idempotent
 without deleting unrelated regions or dates.
 
@@ -102,7 +101,7 @@ Required Silver fields:
 - `category_id`: Kaggle `category_id` or YouTube API `snippet.categoryId`.
 - `region`: from the Bronze S3 key for API data, and from partitioned S3 paths
   for Kaggle data.
-- `trending_date`: the date the video was observed as trending. For API data,
+- `date`: the date the video was observed as trending. For API data,
   this comes from the Bronze S3 key, not from the JSON body.
 - `batch_hour`: `historical` for Kaggle data, or the Bronze `hour=` partition
   for YouTube API data.

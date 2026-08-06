@@ -1,0 +1,3 @@
+from typing import Any
+
+def getResolvedOptions(args: list[str], options: list[str]) -> dict[str, Any]: ...

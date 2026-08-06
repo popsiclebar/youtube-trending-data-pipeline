@@ -19,7 +19,6 @@ KAGGLE_RAW_PREFIX="${KAGGLE_RAW_PREFIX:-youtube/kaggle_raw/raw}"
 API_VIDEOS_PREFIX="${API_VIDEOS_PREFIX:-youtube/api_raw/videos}"
 SILVER_VIDEOS_PREFIX="${SILVER_VIDEOS_PREFIX:-youtube/videos}"
 PROCESS_DATE="${PROCESS_DATE:-}"
-PROCESS_HOUR="${PROCESS_HOUR:-}"
 SNS_TOPIC_ARN="${SNS_TOPIC_ARN:-}"
 MAX_INVALID_ROW_RATIO="${MAX_INVALID_ROW_RATIO:-0.05}"
 GLUE_VERSION="${GLUE_VERSION:-4.0}"
@@ -95,7 +94,6 @@ aws cloudformation deploy \
     ApiVideosPrefix="${API_VIDEOS_PREFIX}" \
     SilverVideosPrefix="${SILVER_VIDEOS_PREFIX}" \
     ProcessDate="${PROCESS_DATE}" \
-    ProcessHour="${PROCESS_HOUR}" \
     SnsAlertTopicArn="${SNS_TOPIC_ARN}" \
     MaxInvalidRowRatio="${MAX_INVALID_ROW_RATIO}" \
     GlueVersion="${GLUE_VERSION}" \
