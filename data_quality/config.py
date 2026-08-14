@@ -45,9 +45,18 @@ class Settings:
 
 
 @dataclass(frozen=True)
-class QualityScope:
+class QualityRequest:
     source: str
     process_date: str | None
+    regions: tuple[str, ...]
+    expected_hours: tuple[str, ...]
+    checks: frozenset[str]
+
+
+@dataclass(frozen=True)
+class QualityScope:
+    source: str
+    process_date: str
     regions: tuple[str, ...]
     expected_hours: tuple[str, ...]
     checks: frozenset[str]
@@ -70,6 +79,8 @@ def _csv_values(raw_value: str, *, lowercase: bool = True) -> tuple[str, ...]:
 def _event_values(raw_value: object, *, lowercase: bool = True) -> tuple[str, ...]:
     if isinstance(raw_value, str):
         return _csv_values(raw_value, lowercase=lowercase)
+    if not isinstance(raw_value, (list, tuple)):
+        raise ValueError("Event value must be a string or list")
     return _csv_values(",".join(str(value) for value in raw_value), lowercase=lowercase)
 
 
@@ -106,7 +117,7 @@ def load_settings() -> Settings:
     )
 
 
-def scope_from_event(event: dict, settings: Settings) -> QualityScope:
+def scope_from_event(event: dict, settings: Settings) -> QualityRequest:
     """Apply safe event overrides while retaining useful deployment defaults."""
     source = str(event.get("source") or settings.default_source).strip().lower()
     if not _SAFE_VALUE.fullmatch(source):
@@ -146,4 +157,4 @@ def scope_from_event(event: dict, settings: Settings) -> QualityScope:
     if unknown_checks:
         raise ValueError(f"Unknown data-quality checks: {sorted(unknown_checks)}")
 
-    return QualityScope(source, process_date, regions, expected_hours, checks)
+    return QualityRequest(source, process_date, regions, expected_hours, checks)

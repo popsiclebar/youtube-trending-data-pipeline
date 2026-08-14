@@ -59,27 +59,35 @@ def transform_category_json(
         subset=["source", "region", "date", "category_id"], keep="last"
     )
     df["category_id"] = df["category_id"].astype("Int64")
+    df["date"] = df["date"].astype("string")
 
+    filename = (
+        f"categories_{date}.parquet"
+        if date is not None
+        else "categories.parquet"
+    )
     silver_key = (
         f"{settings.categories_output_prefix}source={source}/region={region}/"
-        f"categories_{date}.parquet"
+        f"{filename}"
     )
     parquet_df = df.drop(columns=["source", "region"])
+    metadata = {
+        "pipeline-layer": "silver",
+        "source": source,
+        "dataset": "categories",
+        "region": region,
+        "record-count": str(len(parquet_df)),
+        "ingestion-timestamp": datetime.now(UTC).isoformat(),
+        "bronze-bucket": bronze_bucket,
+        "bronze-key": bronze_key,
+    }
+    if date is not None:
+        metadata["date"] = date
     write_parquet_to_s3(
         parquet_df,
         settings.silver_bucket,
         silver_key,
-        metadata={
-            "pipeline-layer": "silver",
-            "source": source,
-            "dataset": "categories",
-            "region": region,
-            "date": date,
-            "record-count": str(len(parquet_df)),
-            "ingestion-timestamp": datetime.now(UTC).isoformat(),
-            "bronze-bucket": bronze_bucket,
-            "bronze-key": bronze_key,
-        },
+        metadata=metadata,
     )
     register_category_partition(
         settings.silver_database,
@@ -100,10 +108,10 @@ def extract_region(s3_key: str) -> str:
     return match.group(1).lower()
 
 
-def extract_date(s3_key: str, source: str) -> str:
-    """Use the API date partition, or `historical` for static Kaggle references."""
+def extract_date(s3_key: str, source: str) -> str | None:
+    """Return the API date; Kaggle category lookups are undated."""
     if source == "kaggle":
-        return "historical"
+        return None
 
     match = DATE_PATTERN.search(s3_key)
     if not match:
@@ -115,5 +123,5 @@ def validate_category_silver(df: pd.DataFrame, source: str) -> None:
     """Validate the minimum quality needed before writing Silver categories."""
     if df.empty:
         raise ValueError(f"{source} category JSON produced no Silver rows.")
-    if df["category_id"].isna().all():
+    if bool(df["category_id"].isna().all()):
         raise ValueError(f"{source} category JSON has no usable category_id values.")

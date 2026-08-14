@@ -103,7 +103,7 @@ Required Silver fields:
   for Kaggle data.
 - `date`: the date the video was observed as trending. For API data,
   this comes from the Bronze S3 key, not from the JSON body.
-- `batch_hour`: `historical` for Kaggle data, or the Bronze `hour=` partition
+- `batch_hour`: null for Kaggle data, or the Bronze `hour=` partition
   for YouTube API data.
 - `published_at`: Kaggle `publish_time` or YouTube API `snippet.publishedAt`.
 

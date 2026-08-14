@@ -10,6 +10,7 @@ quality work explicit while respecting the source differences:
 
 import json
 import logging
+from typing import TypedDict
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
@@ -22,7 +23,6 @@ REQUIRED_OBSERVATION_FIELDS = [
     "source",
     "region",
     "date",
-    "batch_hour",
     "published_at",
 ]
 CRITICAL_COLUMNS = REQUIRED_VIDEO_FIELDS + REQUIRED_OBSERVATION_FIELDS
@@ -45,9 +45,27 @@ TEXT_COLUMNS = [
 ]
 
 
+class QualityMetrics(TypedDict):
+    dataset: str
+    input_rows: int
+    invalid_critical_rows: int
+    invalid_critical_row_ratio: float
+    invalid_numeric_rows: int
+    missing_context: dict[str, int]
+
+
+class TransformMetrics(TypedDict):
+    dataset: str
+    input_rows: int
+    invalid_rows_removed: int
+    duplicate_rows_removed: int
+    output_rows: int
+    quality_checks: QualityMetrics
+
+
 def apply_quality_checks(
     df: DataFrame, dataset_name: str, args: dict[str, str]
-) -> tuple[DataFrame, dict]:
+) -> tuple[DataFrame, TransformMetrics]:
     """
     Run the Silver quality workflow.
 
@@ -84,7 +102,7 @@ def apply_quality_checks(
     deduped_count = deduped_df.count()
     duplicate_count = valid_count - deduped_count
 
-    metrics = {
+    metrics: TransformMetrics = {
         "dataset": dataset_name,
         "input_rows": row_count,
         "invalid_rows_removed": dq_metrics["invalid_critical_rows"],
@@ -121,7 +139,7 @@ def cleanse_video_data(df: DataFrame) -> DataFrame:
 
 def collect_quality_metrics(
     df: DataFrame, dataset_name: str, input_rows: int
-) -> dict[str, object]:
+) -> QualityMetrics:
     """Collect row counts that describe Silver data quality."""
     invalid_critical_rows = df.filter(critical_field_is_invalid()).count()
     invalid_numeric_rows = df.filter(numeric_field_is_negative()).count()
@@ -136,7 +154,7 @@ def collect_quality_metrics(
         "channel_title": df.filter(F.col("channel_title").isNull()).count(),
     }
 
-    metrics = {
+    metrics: QualityMetrics = {
         "dataset": dataset_name,
         "input_rows": input_rows,
         "invalid_critical_rows": invalid_critical_rows,
@@ -148,17 +166,17 @@ def collect_quality_metrics(
     return metrics
 
 
-def fail_on_quality_thresholds(metrics: dict[str, object], args: dict[str, str]) -> None:
+def fail_on_quality_thresholds(metrics: QualityMetrics, args: dict[str, str]) -> None:
     """Fail the job when the Silver dataset is too poor to trust."""
     max_invalid_ratio = float(args["max_invalid_row_ratio"])
-    invalid_ratio = float(metrics["invalid_critical_row_ratio"])
+    invalid_ratio = metrics["invalid_critical_row_ratio"]
     if invalid_ratio > max_invalid_ratio:
         raise ValueError(
             "Invalid critical row ratio "
             f"{invalid_ratio:.2%} exceeds threshold {max_invalid_ratio:.2%}."
         )
 
-    if int(metrics["invalid_numeric_rows"]) > 0:
+    if metrics["invalid_numeric_rows"] > 0:
         raise ValueError(
             f"{metrics['dataset']} contains {metrics['invalid_numeric_rows']} "
             "rows with negative numeric metrics."
@@ -188,7 +206,10 @@ def critical_field_is_invalid():
     condition = F.lit(False)
     for column_name in CRITICAL_COLUMNS:
         condition = condition | F.col(column_name).isNull()
-    return condition
+    api_context_is_missing = (F.col("source") == "youtube_api") & (
+        F.col("channel_id").isNull() | F.col("batch_hour").isNull()
+    )
+    return condition | api_context_is_missing
 
 
 def numeric_field_is_negative():

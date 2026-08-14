@@ -2,7 +2,7 @@
 
 from dataclasses import asdict, dataclass
 
-from config import QualityScope, Settings
+from config import QualityRequest, QualityScope, Settings
 
 
 @dataclass(frozen=True)
@@ -24,23 +24,28 @@ def _table(database: str, table: str) -> str:
     return f'"{database}"."{table}"'
 
 
-def resolve_process_date(runner, settings: Settings, scope: QualityScope) -> QualityScope:
+def resolve_process_date(
+    runner, settings: Settings, request: QualityRequest
+) -> QualityScope:
     """Use the newest video partition date when the invocation omits one."""
-    if scope.process_date:
-        return scope
-    row = runner.execute(
-        f"SELECT CAST(max(date) AS varchar) AS process_date "
-        f"FROM {_table(settings.silver_database, settings.video_table)} "
-        f"WHERE source = {_literal(scope.source)}"
-    )[0]
-    if not row.get("process_date"):
-        raise ValueError(f"No Silver video date found for source {scope.source!r}")
+    process_date = request.process_date
+    if process_date is None:
+        row = runner.execute(
+            f"SELECT CAST(max(date) AS varchar) AS process_date "
+            f"FROM {_table(settings.silver_database, settings.video_table)} "
+            f"WHERE source = {_literal(request.source)}"
+        )[0]
+        process_date = row.get("process_date")
+        if process_date is None:
+            raise ValueError(
+                f"No Silver video date found for source {request.source!r}"
+            )
     return QualityScope(
-        scope.source,
-        row["process_date"],
-        scope.regions,
-        scope.expected_hours,
-        scope.checks,
+        request.source,
+        process_date,
+        request.regions,
+        request.expected_hours,
+        request.checks,
     )
 
 
@@ -56,7 +61,13 @@ def validate_catalog(
             "view_count", "like_count", "dislike_count", "favorite_count",
             "comment_count", "silver_ingestion_timestamp", "source", "region", "date",
         },
-        settings.category_table: {"category_id", "category_title", "date", "source", "region"},
+        settings.category_table: {
+            "category_id",
+            "category_title",
+            "date",
+            "source",
+            "region",
+        },
     }
     results = []
     for table_name, expected_columns in required.items():
@@ -91,6 +102,11 @@ def run_video_checks(runner, settings: Settings, scope: QualityScope) -> list[Ch
         f"AND region IN ({regions_sql})"
     )
     table = _table(settings.silver_database, settings.video_table)
+    required_api_context_sql = (
+        " OR channel_id IS NULL OR batch_hour IS NULL"
+        if scope.source == "youtube_api"
+        else ""
+    )
     metrics = {}
     if selected & {
         "video_rows",
@@ -100,8 +116,8 @@ def run_video_checks(runner, settings: Settings, scope: QualityScope) -> list[Ch
     }:
         metrics = runner.execute(
             "SELECT count(*) AS row_count, "
-            "sum(CASE WHEN video_id IS NULL OR channel_id IS NULL "
-            "OR category_id IS NULL OR published_at IS NULL OR batch_hour IS NULL "
+            "sum(CASE WHEN video_id IS NULL "
+            f"OR category_id IS NULL OR published_at IS NULL{required_api_context_sql} "
             "THEN 1 ELSE 0 END) AS critical_null_rows, "
             "sum(CASE WHEN coalesce(view_count, 0) < 0 "
             "OR coalesce(like_count, 0) < 0 OR coalesce(dislike_count, 0) < 0 "
@@ -188,9 +204,14 @@ def run_category_checks(runner, settings: Settings, scope: QualityScope) -> list
         return []
 
     regions_sql = ", ".join(_literal(region) for region in scope.regions)
+    date_filter = (
+        "date IS NULL"
+        if scope.source == "kaggle"
+        else f"TRY_CAST(date AS DATE) = DATE {_literal(scope.process_date)}"
+    )
     where = (
         f"source = {_literal(scope.source)} "
-        f"AND TRY_CAST(date AS DATE) = DATE {_literal(scope.process_date)} "
+        f"AND {date_filter} "
         f"AND region IN ({regions_sql})"
     )
     table = _table(settings.silver_database, settings.category_table)
@@ -199,7 +220,7 @@ def run_category_checks(runner, settings: Settings, scope: QualityScope) -> list
         metrics = runner.execute(
             "SELECT count(*) AS row_count, "
             "sum(CASE WHEN category_id IS NULL OR category_title IS NULL "
-            "OR trim(category_title) = '' OR date IS NULL THEN 1 ELSE 0 END) "
+            "OR trim(category_title) = '' THEN 1 ELSE 0 END) "
             f"AS critical_null_rows FROM {table} WHERE {where}"
         )[0]
     duplicate_rows = 0
@@ -236,6 +257,11 @@ def run_mapping_check(runner, settings: Settings, scope: QualityScope) -> list[C
     regions_sql = ", ".join(_literal(region) for region in scope.regions)
     source = _literal(scope.source)
     process_date = _literal(scope.process_date)
+    date_filter = (
+        "date IS NULL"
+        if scope.source == "kaggle"
+        else f"TRY_CAST(date AS DATE) = DATE {process_date}"
+    )
     video_table = _table(settings.silver_database, settings.video_table)
     category_table = _table(settings.silver_database, settings.category_table)
     row = runner.execute(
@@ -244,7 +270,7 @@ def run_mapping_check(runner, settings: Settings, scope: QualityScope) -> list[C
         f"WHERE source = {source} AND date = DATE {process_date} AND region IN ({regions_sql})"
         ") v LEFT JOIN ("
         "SELECT DISTINCT region, category_id FROM " + category_table + " "
-        f"WHERE source = {source} AND TRY_CAST(date AS DATE) = DATE {process_date} "
+        f"WHERE source = {source} AND {date_filter} "
         f"AND region IN ({regions_sql})"
         ") c ON v.region = c.region AND v.category_id = c.category_id WHERE c.category_id IS NULL"
     )[0]

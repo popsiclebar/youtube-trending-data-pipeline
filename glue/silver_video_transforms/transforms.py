@@ -67,7 +67,7 @@ def transform_kaggle_videos(spark, args: dict[str, str]) -> DataFrame:
         extract_region_from_path("_source_file").alias("region"),
         F.col("video_id"),
         observation_date.alias("date"),
-        F.lit("historical").alias("batch_hour"),
+        F.lit(None).cast("string").alias("batch_hour"),
         F.to_timestamp("publish_time").alias("published_at"),
         F.lit(None).cast("string").alias("channel_id"),
         F.col("channel_title"),

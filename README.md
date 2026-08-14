@@ -150,7 +150,7 @@ Silver output layout:
 ```text
 s3://<silver-bucket>/youtube/videos/source=kaggle/region=<region>/date=<date>/...
 s3://<silver-bucket>/youtube/videos/source=youtube_api/region=<region>/date=<date>/...
-s3://<silver-bucket>/youtube/categories/source=kaggle/region=<region>/categories_historical.parquet
+s3://<silver-bucket>/youtube/categories/source=kaggle/region=<region>/categories.parquet
 s3://<silver-bucket>/youtube/categories/source=youtube_api/region=<region>/categories_<date>.parquet
 ```
 
@@ -158,18 +158,15 @@ The `source` partition keeps lineage visible in Silver while allowing downstream
 Glue and Athena jobs to compare or combine sources intentionally. All region
 partition values are lowercase. Video data is partitioned by `date`, which
 makes daily reruns idempotent without partitioning down to the hour. Category
-files store `date` as a normal column and use one deterministic file per day
-inside each `source`/`region` partition.
-
-Existing deployments need a controlled backfill for this layout change. Legacy
-Silver videos under uppercase `region=` and `trending_date=` paths are not moved
-or deleted automatically. Older category Parquet files remain readable but have
-a null `date` until their Bronze inputs are reprocessed. Validate the new
-lowercase `region=`/`date=` outputs before archiving any legacy objects.
+files store nullable `date` as a normal column. YouTube API categories use one
+deterministic file per date inside each `source`/`region` partition. Kaggle
+categories are an undated static lookup, so `date` is null and each region has
+one deterministic `categories.parquet` file.
 
 When joining daily API videos to category snapshots, use the complete
-`source`/`region`/`date`/`category_id` key. A join on `category_id` alone can
-multiply video rows across regions and snapshot dates.
+`source`/`region`/`date`/`category_id` key. Kaggle videos join the
+static category lookup by `source`/`region`/`category_id`. A join on
+`category_id` alone can multiply video rows across regions and snapshot dates.
 
 ## Glue Catalog And Athena Strategy
 
@@ -252,11 +249,12 @@ SNS_TOPIC_ARN=<optional-sns-topic-arn>
 MAX_INVALID_ROW_RATIO=0.05
 ```
 
-Category Silver Parquet objects include a `date` column plus S3 object metadata
-such as source, dataset, region, record count, ingestion timestamp, and the
-original Bronze object. Static Kaggle category references use
-`date=historical`. The Silver video Glue job keeps lineage in table columns and
-partitions, including `source`, `region`, `date`, and
+Category Silver Parquet objects include a nullable `date` column plus S3 object
+metadata such as source, dataset, region, record count, ingestion timestamp,
+and the original Bronze object. Static Kaggle category references have a null
+`date`.
+The Silver video Glue job keeps lineage in table columns and partitions,
+including `source`, `region`, `date`, and
 `silver_ingestion_timestamp`.
 
 ## Deployment
@@ -417,7 +415,8 @@ The default gate validates:
   `region + date + category_id` for categories;
 - Silver freshness and expected region coverage;
 - expected hourly coverage when `EXPECTED_HOURS` is configured; and
-- video-to-category mapping at the same source, region, and date.
+- video-to-category mapping at the same source, region, and API date;
+  Kaggle uses its undated static category lookup.
 
 An invocation can narrow the scope or select checks without accepting table
 names or arbitrary SQL from the event:
