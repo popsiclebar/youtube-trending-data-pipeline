@@ -17,6 +17,10 @@
       "extraPaths": ["glue/silver_video_transforms"]
     },
     {
+      "root": "glue/gold_analytics",
+      "extraPaths": ["glue/gold_analytics"]
+    },
+    {
       "root": "."
     }
   ]

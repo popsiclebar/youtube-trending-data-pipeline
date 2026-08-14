@@ -1,0 +1,282 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Deploy the daily YouTube Silver-to-Gold analytics AWS Glue job.
+
+Parameters:
+  JobName:
+    Type: String
+    Default: yt-gold-analytics
+  ScriptS3Bucket:
+    Type: String
+  ScriptS3Key:
+    Type: String
+  ExtraPyFilesS3Key:
+    Type: String
+  SilverBucketName:
+    Type: String
+  GoldBucketName:
+    Type: String
+  SilverDatabaseName:
+    Type: String
+    Default: yt-pipeline-silver-test
+  GoldDatabaseName:
+    Type: String
+    Default: yt-pipeline-gold-test
+  VideoTableName:
+    Type: String
+    Default: clean_video_statistics
+  CategoryTableName:
+    Type: String
+    Default: clean_category_data
+  TrendingTableName:
+    Type: String
+    Default: trending_analytics
+  ChannelTableName:
+    Type: String
+    Default: channel_analytics
+  CategoryAnalyticsTableName:
+    Type: String
+    Default: category_analytics
+  GoldPrefix:
+    Type: String
+    Default: youtube
+  ProcessDate:
+    Type: String
+    Default: ""
+    Description: Default date; daily orchestration should override this Glue argument.
+  SnsAlertTopicArn:
+    Type: String
+    Default: ""
+  GlueVersion:
+    Type: String
+    Default: "4.0"
+  WorkerType:
+    Type: String
+    Default: G.1X
+  NumberOfWorkers:
+    Type: Number
+    Default: 2
+    MinValue: 2
+  TimeoutMinutes:
+    Type: Number
+    Default: 30
+    MinValue: 1
+
+Conditions:
+  HasSnsAlertTopic: !Not [!Equals [!Ref SnsAlertTopicArn, ""]]
+
+Resources:
+  GoldAnalyticsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${JobName}-role"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${JobName}-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadGlueCode
+                Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${ScriptS3Bucket}/${ScriptS3Key}"
+                  - !Sub "arn:${AWS::Partition}:s3:::${ScriptS3Bucket}/${ExtraPyFilesS3Key}"
+              - Sid: ReadSilverObjects
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${SilverBucketName}/*"
+              - Sid: ReplaceGoldObjects
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${GoldBucketName}/${GoldPrefix}/*"
+              - Sid: ListDataBuckets
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${SilverBucketName}"
+                  - !Sub "arn:${AWS::Partition}:s3:::${GoldBucketName}"
+                  - !Sub "arn:${AWS::Partition}:s3:::${ScriptS3Bucket}"
+              - Sid: ReadAndUpdateGlueCatalog
+                Effect: Allow
+                Action:
+                  - glue:BatchCreatePartition
+                  - glue:CreatePartition
+                  - glue:GetDatabase
+                  - glue:GetDatabases
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:UpdatePartition
+                  - glue:UpdateTable
+                Resource: "*"
+              - !If
+                - HasSnsAlertTopic
+                - Sid: PublishFailureAlert
+                  Effect: Allow
+                  Action: sns:Publish
+                  Resource: !Ref SnsAlertTopicArn
+                - !Ref AWS::NoValue
+
+  TrendingAnalyticsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GoldDatabaseName
+      TableInput:
+        Name: !Ref TrendingTableName
+        Description: Regional YouTube trending snapshots by available batch hour.
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: parquet, EXTERNAL: "TRUE"}
+        PartitionKeys:
+          - {Name: date, Type: date}
+        StorageDescriptor:
+          Location: !Sub "s3://${GoldBucketName}/${GoldPrefix}/trending_analytics/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: source, Type: string}
+            - {Name: region, Type: string}
+            - {Name: batch_hour, Type: string}
+            - {Name: video_count, Type: bigint}
+            - {Name: total_view_count, Type: bigint}
+            - {Name: total_like_count, Type: bigint}
+            - {Name: total_dislike_count, Type: bigint}
+            - {Name: total_comment_count, Type: bigint}
+            - {Name: average_view_count, Type: double}
+            - {Name: maximum_view_count, Type: bigint}
+            - {Name: channel_count, Type: bigint}
+            - {Name: category_count, Type: bigint}
+            - {Name: engagement_rate, Type: double}
+            - {Name: gold_aggregation_timestamp, Type: timestamp}
+
+  ChannelAnalyticsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GoldDatabaseName
+      TableInput:
+        Name: !Ref ChannelTableName
+        Description: Channel performance within each regional trending snapshot.
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: parquet, EXTERNAL: "TRUE"}
+        PartitionKeys:
+          - {Name: date, Type: date}
+        StorageDescriptor:
+          Location: !Sub "s3://${GoldBucketName}/${GoldPrefix}/channel_analytics/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: source, Type: string}
+            - {Name: region, Type: string}
+            - {Name: batch_hour, Type: string}
+            - {Name: channel_id, Type: string}
+            - {Name: channel_title, Type: string}
+            - {Name: video_count, Type: bigint}
+            - {Name: total_view_count, Type: bigint}
+            - {Name: total_like_count, Type: bigint}
+            - {Name: total_dislike_count, Type: bigint}
+            - {Name: total_comment_count, Type: bigint}
+            - {Name: average_view_count, Type: double}
+            - {Name: maximum_view_count, Type: bigint}
+            - {Name: category_count, Type: bigint}
+            - {Name: engagement_rate, Type: double}
+            - {Name: view_rank, Type: int}
+            - {Name: gold_aggregation_timestamp, Type: timestamp}
+
+  CategoryAnalyticsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GoldDatabaseName
+      TableInput:
+        Name: !Ref CategoryAnalyticsTableName
+        Description: Category performance within each regional trending snapshot.
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: parquet, EXTERNAL: "TRUE"}
+        PartitionKeys:
+          - {Name: date, Type: date}
+        StorageDescriptor:
+          Location: !Sub "s3://${GoldBucketName}/${GoldPrefix}/category_analytics/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: source, Type: string}
+            - {Name: region, Type: string}
+            - {Name: batch_hour, Type: string}
+            - {Name: category_id, Type: int}
+            - {Name: category_title, Type: string}
+            - {Name: video_count, Type: bigint}
+            - {Name: total_view_count, Type: bigint}
+            - {Name: total_like_count, Type: bigint}
+            - {Name: total_dislike_count, Type: bigint}
+            - {Name: total_comment_count, Type: bigint}
+            - {Name: average_view_count, Type: double}
+            - {Name: maximum_view_count, Type: bigint}
+            - {Name: channel_count, Type: bigint}
+            - {Name: engagement_rate, Type: double}
+            - {Name: view_share_percentage, Type: double}
+            - {Name: view_rank, Type: int}
+            - {Name: gold_aggregation_timestamp, Type: timestamp}
+
+  GoldAnalyticsJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Ref JobName
+      Role: !GetAtt GoldAnalyticsRole.Arn
+      GlueVersion: !Ref GlueVersion
+      WorkerType: !Ref WorkerType
+      NumberOfWorkers: !Ref NumberOfWorkers
+      Timeout: !Ref TimeoutMinutes
+      MaxRetries: 0
+      Command:
+        Name: glueetl
+        PythonVersion: "3"
+        ScriptLocation: !Sub "s3://${ScriptS3Bucket}/${ScriptS3Key}"
+      DefaultArguments:
+        "--job-language": python
+        "--enable-glue-datacatalog": ""
+        "--enable-metrics": "true"
+        "--enable-continuous-cloudwatch-log": "true"
+        "--extra-py-files": !Sub "s3://${ScriptS3Bucket}/${ExtraPyFilesS3Key}"
+        "--SILVER_DATABASE": !Ref SilverDatabaseName
+        "--GOLD_DATABASE": !Ref GoldDatabaseName
+        "--GOLD_BUCKET": !Ref GoldBucketName
+        "--PROCESS_DATE": !Ref ProcessDate
+        "--VIDEO_TABLE": !Ref VideoTableName
+        "--CATEGORY_TABLE": !Ref CategoryTableName
+        "--TRENDING_TABLE": !Ref TrendingTableName
+        "--CHANNEL_TABLE": !Ref ChannelTableName
+        "--CATEGORY_ANALYTICS_TABLE": !Ref CategoryAnalyticsTableName
+        "--GOLD_PREFIX": !Ref GoldPrefix
+        "--SNS_TOPIC_ARN": !Ref SnsAlertTopicArn
+
+Outputs:
+  JobName:
+    Value: !Ref GoldAnalyticsJob
+  GoldDatabaseName:
+    Value: !Ref GoldDatabaseName
+  TrendingTableName:
+    Value: !Ref TrendingAnalyticsTable
+  ChannelTableName:
+    Value: !Ref ChannelAnalyticsTable
+  CategoryAnalyticsTableName:
+    Value: !Ref CategoryAnalyticsTable

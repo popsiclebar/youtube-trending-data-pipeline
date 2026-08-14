@@ -61,7 +61,7 @@ def register_category_partition(
         "Values": [source, region],
         "StorageDescriptor": {
             "Columns": [
-                {"Name": "category_id", "Type": "int"},
+                {"Name": "category_id", "Type": "bigint"},
                 {"Name": "category_title", "Type": "string"},
                 {"Name": "channel_id", "Type": "string"},
                 {"Name": "assignable", "Type": "boolean"},

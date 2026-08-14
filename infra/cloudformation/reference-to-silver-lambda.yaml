@@ -181,7 +181,7 @@ Resources:
               serialization.format: "1"
           Columns:
             - Name: category_id
-              Type: int
+              Type: bigint
             - Name: category_title
               Type: string
             - Name: channel_id
