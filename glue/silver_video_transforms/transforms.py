@@ -142,11 +142,9 @@ def transform_api_videos(spark, args: dict[str, str]) -> DataFrame:
 
 
 def build_api_videos_path(args: dict[str, str]) -> str:
-    """Build the API input path, narrowed to one complete date when provided."""
+    """Build the API input path for one authoritative daily snapshot."""
     prefix = args["api_videos_prefix"].strip("/")
-    if args["process_date"]:
-        return (
-            f"s3://{args['bronze_bucket']}/{prefix}/"
-            f"region=*/date={args['process_date']}/hour=*/*"
-        )
-    return s3_path(args["bronze_bucket"], prefix)
+    return (
+        f"s3://{args['bronze_bucket']}/{prefix}/"
+        f"region=*/date={args['process_date']}/hour={args['process_hour']}/*"
+    )

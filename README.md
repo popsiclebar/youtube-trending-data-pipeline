@@ -9,6 +9,10 @@ category analytics through the Glue Data Catalog. The design emphasizes
 explicit schemas, deterministic writes, idempotent daily processing, and
 repeatable infrastructure deployment.
 
+The complete Bronze-to-Gold workflow has been validated successfully in the
+AWS test environment. Its EventBridge schedule is deployed but intentionally
+disabled, so executions remain manual until automated scheduling is required.
+
 ## Architecture
 
 ```text
@@ -42,20 +46,28 @@ Data Sources
     Analytics / Consumption            # Athena and QuickSight
 ```
 
-EventBridge and Step Functions provide orchestration. IAM, CloudWatch, SNS, and
-CloudFormation provide security, monitoring, notifications, and deployment.
+EventBridge starts the daily workflow, and Step Functions coordinates ingestion,
+parallel Silver transformations, validation, and Gold processing. IAM,
+CloudWatch, SNS, and CloudFormation provide security, monitoring,
+notifications, and repeatable deployment.
 
 ## Processing model
 
-The live API pipeline is designed for two snapshots per UTC day, at hours `00`
-and `12`. Scheduling stays outside the ingestion Lambda: EventBridge starts a
-Standard Step Functions workflow, and a Wait state coordinates the second
-snapshot before daily Silver, quality, and Gold processing.
+The live API pipeline ingests one video and category snapshot per UTC day.
+Scheduling stays outside the ingestion Lambda: EventBridge starts a Standard
+Step Functions workflow, which captures one stable execution timestamp and
+uses it through every retry.
 
-YouTube statistics are cumulative snapshots. Gold therefore keeps each
-`batch_hour` separate; it never adds the same video's views or likes across
-hours. A daily rerun rebuilds one complete `date` partition and leaves all other
-dates unchanged.
+After ingestion and a short stabilization wait, Step Functions runs the
+category Lambda and Silver video Glue job in parallel. The workflow waits for
+both branches before running the data-quality gate, and Gold runs only when all
+quality checks pass.
+
+YouTube statistics are cumulative snapshots. Gold therefore retains
+`batch_hour` as lineage and never adds the same video's views or likes across
+hours. The hourly Bronze path also preserves earlier raw observations. Each
+successful workflow execution selects its own hour as the authoritative Silver
+snapshot and replaces that date's Silver and Gold partitions.
 
 ## Data Lake Layers
 
@@ -95,7 +107,7 @@ Example invocation:
   "source": "youtube_api",
   "process_date": "2026-08-14",
   "regions": ["ca", "gb", "us"],
-  "expected_hours": ["00", "12"]
+  "expected_hours": ["00"]
 }
 ```
 
@@ -111,6 +123,7 @@ Example invocation:
 ├── lambda/
 │   ├── reference_to_silver/       # Category JSON-to-Parquet transform
 │   └── youtube_api_ingestion/     # Dataset-selectable API ingestion
+├── orchestration/                 # Step Functions ASL workflow definition
 ├── scripts/                       # Packaging, deployment, upload, and backfill
 ├── typings/                       # Local AWS Glue type stubs
 └── README.md
@@ -160,14 +173,47 @@ Deploy the Gold analytics Glue job and its three Catalog tables:
 ./scripts/deploy_gold_analytics_glue_job.sh
 ```
 
-The Gold deployment expects the Gold bucket and Glue database to exist. Daily
-or backfill executions must provide `--PROCESS_DATE`.
+The Gold deployment expects the Gold bucket and Glue database to exist. Gold
+executions require `--PROCESS_DATE`; YouTube API Silver executions require both
+`--PROCESS_DATE` and `--PROCESS_HOUR`.
 
 Package the API ingestion Lambda when updating it independently:
 
 ```bash
 ./scripts/package_youtube_api_ingestion.sh
 ```
+
+Before enabling orchestration, remove the API-category event notification from
+the Bronze S3 bucket. Category processing is invoked synchronously by Step
+Functions; leaving the old notification enabled would run it twice. Historical
+Kaggle category files remain available through
+`scripts/backfill_reference_to_silver.sh`.
+
+Deploy the state machine with the schedule disabled for its first test:
+
+```bash
+export STATE_MACHINE_ROLE_NAME=yt-pipeline-step-functions-role-test
+export ENABLE_SCHEDULE=false
+./scripts/deploy_youtube_pipeline.sh
+```
+
+The default schedule is `00:10 UTC` each day. Keep `ENABLE_SCHEDULE=false` for
+manual operation, or deploy with `ENABLE_SCHEDULE=true` when automatic daily
+execution is required.
+
+### Invocation permissions
+
+Pipeline Lambda functions and Glue jobs are production worker components. The
+CloudFormation workflow policy grants their invocation permissions to the Step
+Functions execution role. A production operator role should receive Step
+Functions start, inspect, and redrive permissions without direct Lambda or Glue
+invocation permissions.
+
+Direct Lambda testing remains appropriate in the test environment. The tester's
+IAM role can retain `lambda:InvokeFunction` for the `-test` ingestion function
+while the production operator role does not. An IAM denial returns
+`AccessDeniedException` before Lambda code runs; denied attempts remain
+auditable through CloudTrail.
 
 ## Manual batch execution
 
@@ -176,7 +222,7 @@ Run Silver for one complete API date:
 ```bash
 aws glue start-job-run \
   --job-name yt-silver-video-transform \
-  --arguments '{"--SOURCE":"youtube_api","--PROCESS_DATE":"2026-08-14"}'
+  --arguments '{"--SOURCE":"youtube_api","--PROCESS_DATE":"2026-08-14","--PROCESS_HOUR":"00"}'
 ```
 
 Run the data-quality gate after both Silver datasets are ready:
@@ -185,7 +231,7 @@ Run the data-quality gate after both Silver datasets are ready:
 aws lambda invoke \
   --function-name yt-data-pipeline-data-quality-test \
   --cli-binary-format raw-in-base64-out \
-  --payload '{"source":"youtube_api","process_date":"2026-08-14","regions":["ca","gb","us"],"expected_hours":["00","12"]}' \
+  --payload '{"source":"youtube_api","process_date":"2026-08-14","regions":["ca","gb","us"],"expected_hours":["00"]}' \
   data-quality-result.json
 ```
 

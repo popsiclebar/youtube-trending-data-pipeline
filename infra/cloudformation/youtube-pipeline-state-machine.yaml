@@ -1,0 +1,179 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Deploy the daily YouTube Bronze-to-Gold Step Functions workflow.
+
+Parameters:
+  StateMachineName:
+    Type: String
+    Default: yt-youtube-pipeline
+
+  StateMachineRoleName:
+    Type: String
+    Default: yt-pipeline-step-functions-role-test
+    Description: Existing IAM role assumed by Step Functions.
+
+  DefinitionS3Bucket:
+    Type: String
+    Description: S3 bucket containing the ASL workflow definition.
+
+  DefinitionS3Key:
+    Type: String
+    Description: S3 key containing the ASL workflow definition.
+
+  YouTubeApiIngestionFunctionName:
+    Type: String
+    Default: yt-youtube-api-ingestion
+
+  CategoryTransformFunctionName:
+    Type: String
+    Default: yt-reference-to-silver
+
+  DataQualityFunctionName:
+    Type: String
+    Default: yt-data-pipeline-data-quality-test
+
+  SilverVideoGlueJobName:
+    Type: String
+    Default: yt-silver-video-transform
+
+  GoldGlueJobName:
+    Type: String
+    Default: yt-gold-analytics
+
+  SnsTopicArn:
+    Type: String
+    Description: SNS topic ARN for final pipeline notifications.
+
+  ScheduleExpression:
+    Type: String
+    Default: cron(10 0 * * ? *)
+    Description: EventBridge schedule in UTC.
+
+  EnableSchedule:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+Conditions:
+  ScheduleEnabled: !Equals [!Ref EnableSchedule, "true"]
+
+Resources:
+  StateMachineExecutionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${StateMachineName}-execution-policy"
+      Roles:
+        - !Ref StateMachineRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: InvokePipelineLambdas
+            Effect: Allow
+            Action: lambda:InvokeFunction
+            Resource:
+              - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${YouTubeApiIngestionFunctionName}"
+              - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${CategoryTransformFunctionName}"
+              - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${DataQualityFunctionName}"
+          - Sid: RunPipelineGlueJobs
+            Effect: Allow
+            Action:
+              - glue:StartJobRun
+              - glue:GetJobRun
+              - glue:GetJobRuns
+              - glue:BatchStopJobRun
+            Resource:
+              - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${SilverVideoGlueJobName}"
+              - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${GoldGlueJobName}"
+          - Sid: PublishPipelineNotifications
+            Effect: Allow
+            Action: sns:Publish
+            Resource: !Ref SnsTopicArn
+          - Sid: DeliverStateMachineLogs
+            Effect: Allow
+            Action:
+              - logs:CreateLogDelivery
+              - logs:GetLogDelivery
+              - logs:UpdateLogDelivery
+              - logs:DeleteLogDelivery
+              - logs:ListLogDeliveries
+              - logs:PutResourcePolicy
+              - logs:DescribeResourcePolicies
+              - logs:DescribeLogGroups
+            Resource: "*"
+
+  PipelineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/vendedlogs/states/${StateMachineName}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  PipelineStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    DependsOn: StateMachineExecutionPolicy
+    Properties:
+      StateMachineName: !Ref StateMachineName
+      StateMachineType: STANDARD
+      RoleArn: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${StateMachineRoleName}"
+      DefinitionS3Location:
+        Bucket: !Ref DefinitionS3Bucket
+        Key: !Ref DefinitionS3Key
+      DefinitionSubstitutions:
+        Partition: !Ref AWS::Partition
+        IngestionFunctionArn: !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${YouTubeApiIngestionFunctionName}"
+        CategoryFunctionArn: !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${CategoryTransformFunctionName}"
+        DataQualityFunctionArn: !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${DataQualityFunctionName}"
+        SilverVideoGlueJobName: !Ref SilverVideoGlueJobName
+        GoldGlueJobName: !Ref GoldGlueJobName
+        SnsTopicArn: !Ref SnsTopicArn
+      LoggingConfiguration:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt PipelineLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+
+  EventBridgeInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${StateMachineName}-eventbridge-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${StateMachineName}-eventbridge-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref PipelineStateMachine
+
+  PipelineSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${StateMachineName}-schedule"
+      Description: Start the daily YouTube Bronze-to-Gold pipeline.
+      ScheduleExpression: !Ref ScheduleExpression
+      State: !If [ScheduleEnabled, ENABLED, DISABLED]
+      Targets:
+        - Arn: !Ref PipelineStateMachine
+          Id: PipelineStateMachineTarget
+          RoleArn: !GetAtt EventBridgeInvokeRole.Arn
+          Input: "{}"
+
+Outputs:
+  StateMachineArn:
+    Value: !Ref PipelineStateMachine
+
+  ScheduleName:
+    Value: !Ref PipelineSchedule
+
+  LogGroupName:
+    Value: !Ref PipelineLogGroup

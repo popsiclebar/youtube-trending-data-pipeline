@@ -2,7 +2,6 @@
 set -euo pipefail
 
 # Invoke the Reference-to-Silver Lambda for existing Bronze category JSON files.
-# This is useful when files were uploaded before the S3 trigger was configured.
 
 FUNCTION_NAME="${FUNCTION_NAME:-yt-reference-to-silver}"
 AWS_REGION="${AWS_REGION:-$(aws configure get region)}"
@@ -56,14 +55,8 @@ bucket = sys.argv[1]
 key = sys.argv[2]
 
 print(json.dumps({
-    "Records": [
-        {
-            "s3": {
-                "bucket": {"name": bucket},
-                "object": {"key": key},
-            }
-        }
-    ]
+    "bucket": bucket,
+    "object_keys": [key],
 }))
 ' "${BRONZE_BUCKET}" "${key}"
   )"

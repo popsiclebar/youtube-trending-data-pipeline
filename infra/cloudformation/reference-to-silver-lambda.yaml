@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Deploy the YouTube category reference JSON to Silver Parquet Lambda.
+Description: Deploy the orchestrated YouTube category JSON to Silver Parquet Lambda.
 
 Parameters:
   FunctionName:
@@ -196,14 +196,6 @@ Resources:
     Properties:
       LogGroupName: !Sub "/aws/lambda/${FunctionName}"
       RetentionInDays: !Ref LogRetentionDays
-
-  AllowS3InvokeReferenceToSilver:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref ReferenceToSilverFunction
-      Action: lambda:InvokeFunction
-      Principal: s3.amazonaws.com
-      SourceArn: !Sub "arn:${AWS::Partition}:s3:::${BronzeBucketName}"
 
 Outputs:
   FunctionName:

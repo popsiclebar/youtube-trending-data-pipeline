@@ -183,13 +183,19 @@ def run_video_checks(runner, settings: Settings, scope: QualityScope) -> list[Ch
         ),
     }
     if scope.expected_hours:
-        missing_hours = {
-            region: sorted(set(scope.expected_hours) - observed_hours.get(region, set()))
+        expected_hour_set = set(scope.expected_hours)
+        actual_hours = {
+            region: sorted(observed_hours.get(region, set()))
             for region in scope.regions
         }
-        missing_hours = {region: hours for region, hours in missing_hours.items() if hours}
+        expected_hours = {
+            region: sorted(expected_hour_set) for region in scope.regions
+        }
         candidates["hour_coverage"] = CheckResult(
-            "hour_coverage", not missing_hours, missing_hours, {}
+            "hour_coverage",
+            actual_hours == expected_hours,
+            actual_hours,
+            expected_hours,
         )
     return [result for name, result in candidates.items() if name in scope.checks]
 

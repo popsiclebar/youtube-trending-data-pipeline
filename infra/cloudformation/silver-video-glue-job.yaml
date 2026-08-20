@@ -39,7 +39,7 @@ Parameters:
 
   Source:
     Type: String
-    Default: all
+    Default: youtube_api
     AllowedValues:
       - all
       - kaggle
@@ -69,7 +69,12 @@ Parameters:
   ProcessDate:
     Type: String
     Default: ""
-    Description: Optional yyyy-mm-dd Bronze API date partition to process.
+    Description: Required yyyy-mm-dd Bronze API date partition to process.
+
+  ProcessHour:
+    Type: String
+    Default: ""
+    Description: Required HH Bronze API hour selected as the daily snapshot.
 
   SnsAlertTopicArn:
     Type: String
@@ -281,6 +286,7 @@ Resources:
         "--API_VIDEOS_PREFIX": !Ref ApiVideosPrefix
         "--SILVER_VIDEOS_PREFIX": !Ref SilverVideosPrefix
         "--PROCESS_DATE": !Ref ProcessDate
+        "--PROCESS_HOUR": !Ref ProcessHour
         "--SNS_TOPIC_ARN": !Ref SnsAlertTopicArn
         "--MAX_INVALID_ROW_RATIO": !Ref MaxInvalidRowRatio
 

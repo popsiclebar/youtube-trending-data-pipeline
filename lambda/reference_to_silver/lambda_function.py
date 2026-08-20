@@ -1,8 +1,8 @@
-"""Lambda entry point for routing category JSON files to Silver Parquet."""
+"""Lambda entry point for transforming explicit category objects to Silver."""
 
 import json
 import logging
-from urllib.parse import unquote_plus
+from typing import Any
 
 import boto3
 
@@ -16,16 +16,21 @@ SETTINGS = load_settings()
 sns = boto3.client("sns")
 
 
-def lambda_handler(event, context):
-    """Transform supported category JSON S3 events into Silver Parquet."""
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    """Transform the Bronze category objects supplied by the orchestrator."""
+    bucket = str(event.get("bucket") or "").strip()
+    object_keys = event.get("object_keys")
+    if not bucket:
+        raise ValueError("bucket is required")
+    if not isinstance(object_keys, list) or not object_keys:
+        raise ValueError("object_keys must be a non-empty list")
+
     processed = []
     errors = []
 
-    for record in event.get("Records", []):
+    for raw_key in object_keys:
+        key = str(raw_key).strip()
         try:
-            s3_info = record["s3"]
-            bucket = s3_info["bucket"]["name"]
-            key = unquote_plus(s3_info["object"]["key"])
             logger.info("Processing s3://%s/%s", bucket, key)
 
             if key.startswith(SETTINGS.reference_prefix) and key.endswith(".json"):
@@ -43,16 +48,15 @@ def lambda_handler(event, context):
                     settings=SETTINGS,
                 )
             else:
-                logger.warning("Skipping unsupported file: %s", key)
-                continue
+                raise ValueError(f"Unsupported category object: {key}")
 
             processed.append(
                 {"bronze_bucket": bucket, "bronze_key": key, "silver_key": silver_key}
             )
 
         except Exception as exc:
-            logger.exception("Failed to process S3 event record: %s", record)
-            errors.append({"record": record, "error": str(exc)})
+            logger.exception("Failed to process category object: %s", key)
+            errors.append({"bucket": bucket, "key": key, "error": str(exc)})
 
     if errors:
         send_failure_alert(errors)

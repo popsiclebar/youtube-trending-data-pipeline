@@ -50,7 +50,8 @@ s3://<silver-bucket>/youtube/videos/source=<source>/region=<region>/date=<date>/
 --KAGGLE_RAW_PREFIX=youtube/kaggle_raw/raw
 --API_VIDEOS_PREFIX=youtube/api_raw/videos
 --SILVER_VIDEOS_PREFIX=youtube/videos
---PROCESS_DATE=<optional-yyyy-mm-dd>
+--PROCESS_DATE=<yyyy-mm-dd-required-for-api>
+--PROCESS_HOUR=<HH-required-for-api>
 --SNS_TOPIC_ARN=<optional-sns-topic-arn>
 --MAX_INVALID_ROW_RATIO=0.05
 ```
@@ -60,16 +61,17 @@ job writes Parquet through a Glue Catalog sink, updating
 `clean_video_statistics` with `source`, `region`, and `date`
 partitions.
 
-For YouTube API runs, `PROCESS_DATE` reads every region and hourly Bronze object
-for one complete date:
+For YouTube API runs, `PROCESS_DATE` and `PROCESS_HOUR` select one authoritative
+snapshot across every configured region:
 
 ```text
-s3://<bronze-bucket>/youtube/api_raw/videos/region=*/date=<PROCESS_DATE>/hour=*/*
+s3://<bronze-bucket>/youtube/api_raw/videos/region=*/date=<PROCESS_DATE>/hour=<PROCESS_HOUR>/*
 ```
 
 The job keeps `batch_hour` as a normal lineage column instead of a partition
-folder. It rebuilds each affected daily partition from the full Bronze date, so
-rerunning the date is idempotent without losing observations from earlier hours.
+folder. It replaces each affected daily partition with the selected snapshot.
+Older hourly Bronze objects remain available for audit and recovery without
+appearing in the authoritative Silver date.
 
 Before writing, the job purges only the exact `source`/`region`/`date`
 partitions present in the current clean DataFrame. This keeps reruns idempotent

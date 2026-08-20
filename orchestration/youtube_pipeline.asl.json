@@ -1,0 +1,244 @@
+{
+  "Comment": "Daily YouTube API Bronze-to-Gold pipeline",
+  "StartAt": "Initialize Pipeline",
+  "States": {
+    "Initialize Pipeline": {
+      "Type": "Pass",
+      "Parameters": {
+        "scheduled_time.$": "$$.Execution.StartTime",
+        "execution_id.$": "$$.Execution.Id"
+      },
+      "ResultPath": "$.workflow",
+      "Next": "Run Daily Ingestion"
+    },
+    "Run Daily Ingestion": {
+      "Type": "Task",
+      "Resource": "arn:${Partition}:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${IngestionFunctionArn}",
+        "Payload": {
+          "scheduled_time.$": "$.workflow.scheduled_time",
+          "fetch_videos": true,
+          "fetch_categories": true
+        }
+      },
+      "ResultPath": "$.ingestion",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "Notify Failure"
+        }
+      ],
+      "Next": "Check Ingestion Status"
+    },
+    "Check Ingestion Status": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ingestion.Payload.statusCode",
+          "NumericEquals": 200,
+          "Next": "Wait For Bronze"
+        }
+      ],
+      "Default": "Notify Failure"
+    },
+    "Wait For Bronze": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "Build Silver In Parallel"
+    },
+    "Build Silver In Parallel": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "Transform Categories To Silver",
+          "States": {
+            "Transform Categories To Silver": {
+              "Type": "Task",
+              "Resource": "arn:${Partition}:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${CategoryFunctionArn}",
+                "Payload": {
+                  "bucket.$": "$.ingestion.Payload.bucket",
+                  "object_keys.$": "$.ingestion.Payload.category_objects"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Transform Videos To Silver",
+          "States": {
+            "Transform Videos To Silver": {
+              "Type": "Task",
+              "Resource": "arn:${Partition}:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "${SilverVideoGlueJobName}",
+                "Arguments": {
+                  "--SOURCE": "youtube_api",
+                  "--PROCESS_DATE.$": "$.ingestion.Payload.process_date",
+                  "--PROCESS_HOUR.$": "$.ingestion.Payload.process_hour"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Glue.ConcurrentRunsExceededException",
+                    "Glue.OperationTimeoutException",
+                    "Glue.InternalServiceException"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.silver_transformations",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "Notify Failure"
+        }
+      ],
+      "Next": "Run Data Quality Gate"
+    },
+    "Run Data Quality Gate": {
+      "Type": "Task",
+      "Resource": "arn:${Partition}:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${DataQualityFunctionArn}",
+        "Payload": {
+          "source": "youtube_api",
+          "process_date.$": "$.ingestion.Payload.process_date",
+          "regions.$": "$.ingestion.Payload.regions",
+          "expected_hours.$": "States.Array($.ingestion.Payload.process_hour)"
+        }
+      },
+      "ResultPath": "$.data_quality",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "Notify Failure"
+        }
+      ],
+      "Next": "Check Data Quality Result"
+    },
+    "Check Data Quality Result": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.data_quality.Payload.quality_passed",
+          "BooleanEquals": true,
+          "Next": "Build Gold Analytics"
+        }
+      ],
+      "Default": "Notify Failure"
+    },
+    "Build Gold Analytics": {
+      "Type": "Task",
+      "Resource": "arn:${Partition}:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${GoldGlueJobName}",
+        "Arguments": {
+          "--PROCESS_DATE.$": "$.ingestion.Payload.process_date"
+        }
+      },
+      "ResultPath": "$.gold_analytics",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Glue.ConcurrentRunsExceededException",
+            "Glue.OperationTimeoutException",
+            "Glue.InternalServiceException"
+          ],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "Notify Failure"
+        }
+      ],
+      "Next": "Notify Success"
+    },
+    "Notify Success": {
+      "Type": "Task",
+      "Resource": "arn:${Partition}:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${SnsTopicArn}",
+        "Subject": "[YT Pipeline] Daily pipeline succeeded",
+        "Message.$": "States.Format('YouTube pipeline succeeded for date={} hour={} execution={}', $.ingestion.Payload.process_date, $.ingestion.Payload.process_hour, $.workflow.execution_id)"
+      },
+      "Next": "Pipeline Succeeded"
+    },
+    "Pipeline Succeeded": {
+      "Type": "Succeed"
+    },
+    "Notify Failure": {
+      "Type": "Task",
+      "Resource": "arn:${Partition}:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${SnsTopicArn}",
+        "Subject": "[YT Pipeline] Daily pipeline failed",
+        "Message.$": "States.JsonToString($)"
+      },
+      "Next": "Pipeline Failed"
+    },
+    "Pipeline Failed": {
+      "Type": "Fail",
+      "Error": "YouTubePipelineFailed",
+      "Cause": "A daily pipeline stage failed or the data-quality gate did not pass."
+    }
+  }
+}

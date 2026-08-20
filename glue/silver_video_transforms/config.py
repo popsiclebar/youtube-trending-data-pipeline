@@ -7,6 +7,7 @@ ETL business logic.
 """
 
 from datetime import date
+import re
 import sys
 
 from awsglue.utils import getResolvedOptions
@@ -22,7 +23,7 @@ def load_args() -> dict[str, str]:
         "silver_bucket": required["SILVER_BUCKET"],
         "bronze_database": optional_arg("BRONZE_DATABASE", "youtube_bronze"),
         "silver_database": optional_arg("SILVER_DATABASE", "youtube_silver"),
-        "source": optional_arg("SOURCE", "all").lower(),
+        "source": optional_arg("SOURCE", "youtube_api").lower(),
         "kaggle_raw_prefix": optional_arg(
             "KAGGLE_RAW_PREFIX", "youtube/kaggle_raw/raw"
         ),
@@ -32,6 +33,7 @@ def load_args() -> dict[str, str]:
             "SILVER_VIDEOS_TABLE", "clean_video_statistics"
         ),
         "process_date": optional_arg("PROCESS_DATE", ""),
+        "process_hour": optional_arg("PROCESS_HOUR", ""),
         "sns_topic_arn": optional_arg("SNS_TOPIC_ARN", ""),
         "max_invalid_row_ratio": optional_arg("MAX_INVALID_ROW_RATIO", "0.05"),
     }
@@ -42,6 +44,15 @@ def load_args() -> dict[str, str]:
         raise ValueError("MAX_INVALID_ROW_RATIO must be between 0 and 1")
     if args["process_date"]:
         date.fromisoformat(args["process_date"])
+    if args["process_hour"] and not re.fullmatch(
+        r"(?:[01][0-9]|2[0-3])", args["process_hour"]
+    ):
+        raise ValueError("PROCESS_HOUR must use HH format from 00 through 23")
+    if args["source"] in {"youtube_api", "all"}:
+        if not args["process_date"] or not args["process_hour"]:
+            raise ValueError(
+                "PROCESS_DATE and PROCESS_HOUR are required for YouTube API processing"
+            )
 
     return args
 
